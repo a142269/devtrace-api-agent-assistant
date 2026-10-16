@@ -1,0 +1,53 @@
+{
+  "mode": "model",
+  "base_url": "http://localhost:18003",
+  "count": 3,
+  "passed": 3,
+  "fallbacks": 0,
+  "median_elapsed_ms": 23981.1,
+  "cases": [
+    {
+      "case": "req_auth_01",
+      "family": "auth",
+      "passed": true,
+      "reasons": [],
+      "decision_mode": "model",
+      "tool_order": [
+        "get_request_trace",
+        "search_api_docs",
+        "inspect_key_scope"
+      ],
+      "tool_actions": 3,
+      "plan_adjustments": [],
+      "elapsed_ms": 25546.5
+    },
+    {
+      "case": "req_quota_01",
+      "family": "quota",
+      "passed": true,
+      "reasons": [],
+      "decision_mode": "model",
+      "tool_order": [
+        "get_request_trace",
+        "search_api_docs"
+      ],
+      "tool_actions": 2,
+      "plan_adjustments": [],
+      "elapsed_ms": 23981.1
+    },
+    {
+      "case": "delivery_01",
+      "family": "webhook",
+      "passed": true,
+      "reasons": [],
+      "decision_mode": "model",
+      "tool_order": [
+        "get_webhook_delivery",
+        "search_api_docs"
+      ],
+      "tool_actions": 2,
+      "plan_adjustments": [],
+      "elapsed_ms": 20722.0
+    }
+  ]
+}

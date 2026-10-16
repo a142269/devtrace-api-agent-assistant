@@ -1,0 +1,24 @@
+# Local secrets and runtime data
+.env
+**/.env
+**/data/
+**/logs/
+*.sqlite
+*.sqlite3
+
+# Python
+**/__pycache__/
+**/*.py[cod]
+**/.pytest_cache/
+**/.venv/
+**/venv/
+
+# JavaScript
+**/node_modules/
+**/dist/
+
+# Editors and OS
+**/.idea/
+**/.vscode/
+.DS_Store
+Thumbs.db

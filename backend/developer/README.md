@@ -1,0 +1,48 @@
+# 开发者平台 API 接入助手
+
+这是 EchoMind Python 后端的独立演示场景；原客服链路和 Java 后端没有被替换。默认使用现有 Anthropic 兼容配置。没有模型服务时，可设置 `DEVELOPER_MODEL_MODE=rules`，用确定性参考模型演示工具和计划状态；此模式不代表大模型规划效果。
+
+## 阅读路线
+
+- [完整构建与模块说明](完整构建与模块说明.md)：从数据、工具、计划、记忆到 API/UI 的构建顺序，并逐项对照 Agent 十模块。
+- [工程化审查](工程化审查.md)：与原客服项目对照、已实现范围、生产级差距与面试表述。
+- [实测评测报告](evaluation_report.md)：自动化测试、HTTP、真实配置模型及界面验证结果。
+
+## 运行
+
+- 全栈：在 `EchoMind` 执行 `docker compose up -d --build`。
+- 模拟平台单独运行：`python -m uvicorn developer.sandbox:app --port 8100`。
+- Python 服务独立运行时，设置 `DEVELOPER_SANDBOX_URL=http://localhost:8100`，并配置 Redis、ChromaDB 与模型环境变量。
+
+模拟平台的固定记录为 `req_auth_01`～`req_auth_10`、`req_quota_01`～`req_quota_10`、`delivery_01`～`delivery_10`。HTTP 接口提供脱敏请求、密钥前缀权限和投递记录；SQLite 保存模拟工单。
+
+## API
+
+`POST /developer/chat` 请求示例：
+
+```json
+{"message":"请求 req_auth_01 返回 401，帮我排查","user_id":"demo","conversation_id":null}
+```
+
+响应包含 `conversation_id`、`run_id`、`answer`、`plan`（目标、模型提议、批准步骤、约束调整、状态）、`actions`（工具输入、观察摘要、状态和来源）、`timeline`、`evidence`、`memory_used`、可选 `ticket_id`、`decision_mode` 和 `mock=true`。`decision_mode` 为 `model`、`rules` 或 `rules_fallback`；模型调用失败或输出无法解析时明确标记降级。计划可能为 `waiting`：补充标识符后用同一 `conversation_id` 继续。`GET /developer/runs/{run_id}?user_id=demo` 查询运行记录；不同 `user_id` 不会读到该记录。
+
+## 设计边界
+
+- 计划生成和下一行动选择可由模型决定；服务端限制工具白名单、从用户或查询结果获取标识符，并控制单轮最多 5 次行动与 1 次计划调整。
+- 模型提出的合法工具顺序会影响批准计划；服务端补齐必需证据、修正依赖，并只允许从当前可执行步骤中选择行动。`plan.proposed_tools`、`approved_tools` 和 `adjustments` 可用于对照审查。最终答复由成功的工具观察整理生成。开发者工具是项目内注册与调用，并未提供独立 MCP 协议服务。
+- Redis 保存 24 小时计划状态和运行记录；开发者记忆使用独立键前缀、`developer_episodic` 和 `developer_profile` collection；文档位于独立的 `developer_knowledge` collection。
+- 回复、界面和工单均说明数据来自本地模拟平台；不接入真实开发者账号、生产日志或工单系统。
+- `GET /developer/runs` 仅以演示用户标识做隔离，部署到真实多用户环境前必须增加身份认证和授权。
+
+## 验证
+
+`python -m unittest discover -s tests -p test_developer_assistant.py` 覆盖 30 条固定案例、跨轮恢复、错误标识后调整、工单去重、用户隔离与敏感信息脱敏。现有客服回归测试运行 `python -m pytest -q tests`。实测结果见 [evaluation_report.md](evaluation_report.md)；模型在线演示需要有效的模型 API Key。
+
+连接已启动的两个服务后，可以运行同一套 HTTP 判定器：
+
+```powershell
+python -m developer.evaluate --base-url http://localhost:18002 --mode rules --output developer/eval_rules.json
+python -m developer.evaluate --base-url http://localhost:18003 --mode model --sample-per-family 1 --output developer/eval_model.json
+```
+
+评测检查完成状态、必需工具集合、文档与记录证据、依赖顺序、模拟数据声明和决策模式；出现未通过案例时命令返回非零退出码。`--sample-per-family 1` 表示每类一条，是演示抽样，不是模型准确率。
