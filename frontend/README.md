@@ -1,6 +1,6 @@
-# EchoMind Frontend
+# DevTrace Frontend
 
-独立 Vue 前端项目，可同时连接 EchoMind Python 版本和 EchoMind Java 版本。
+DevTrace 的 Vue 前端，用于展示开发者 API 接入 Agent 的计划、工具行动、观察结果与证据。
 
 项目目录：
 

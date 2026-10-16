@@ -1,4 +1,4 @@
-# EchoMind Developer API Integration Assistant
+# DevTrace——开发者平台 API 接入 Agent 助手
 
 [English](#english) | [中文](#中文)
 
@@ -46,7 +46,7 @@ frontend/  Vue 3 + Vite 对话页，展示计划、行动、证据和记忆使�
 
 ## English
 
-A portfolio-ready developer API diagnosis agent. It demonstrates constrained multi-step planning, ReAct-style tool use, Redis/ChromaDB memory, evidence-backed answers, and a Vue visualization for 401 authentication, 429 rate-limit, and Webhook delivery failures.
+DevTrace is a portfolio-ready developer API diagnosis agent. It demonstrates constrained multi-step planning, ReAct-style tool use, Redis/ChromaDB memory, evidence-backed answers, and a Vue visualization for 401 authentication, 429 rate-limit, and Webhook delivery failures.
 
 The project intentionally uses a local mock platform and masked records. It does not connect to production accounts, logs, or ticketing systems.
 

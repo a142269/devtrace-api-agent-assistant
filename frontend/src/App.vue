@@ -1,9 +1,9 @@
 <template>
   <main :class="['app-shell', `app-shell-${activeView}`]">
     <header class="topbar">
-      <a class="brand" href="#" aria-label="EchoMind 首页" @click.prevent="activeView = 'chat'">
-        <span class="brand-mark">E</span>
-        <span class="brand-name">EchoMind</span>
+      <a class="brand" href="#" aria-label="DevTrace 首页" @click.prevent="activeView = 'developer'">
+        <span class="brand-mark">D</span>
+        <span class="brand-name">DevTrace</span>
       </a>
 
       <nav class="view-nav" aria-label="工作区">
