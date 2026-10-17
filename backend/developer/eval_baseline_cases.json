@@ -1,0 +1,182 @@
+[
+  {
+    "family": "auth",
+    "identifier": "req_auth_01",
+    "message": "请求 req_auth_01 返回 401，帮我排查",
+    "expected_cause": "expired_key"
+  },
+  {
+    "family": "auth",
+    "identifier": "req_auth_02",
+    "message": "请求 req_auth_02 返回 403，帮我排查",
+    "expected_cause": "missing_scope"
+  },
+  {
+    "family": "auth",
+    "identifier": "req_auth_03",
+    "message": "请求 req_auth_03 返回 401，帮我排查",
+    "expected_cause": "malformed_header"
+  },
+  {
+    "family": "auth",
+    "identifier": "req_auth_04",
+    "message": "请求 req_auth_04 返回 401，帮我排查",
+    "expected_cause": "expired_key"
+  },
+  {
+    "family": "auth",
+    "identifier": "req_auth_05",
+    "message": "请求 req_auth_05 返回 403，帮我排查",
+    "expected_cause": "missing_scope"
+  },
+  {
+    "family": "auth",
+    "identifier": "req_auth_06",
+    "message": "请求 req_auth_06 返回 401，帮我排查",
+    "expected_cause": "malformed_header"
+  },
+  {
+    "family": "auth",
+    "identifier": "req_auth_07",
+    "message": "请求 req_auth_07 返回 401，帮我排查",
+    "expected_cause": "expired_key"
+  },
+  {
+    "family": "auth",
+    "identifier": "req_auth_08",
+    "message": "请求 req_auth_08 返回 403，帮我排查",
+    "expected_cause": "missing_scope"
+  },
+  {
+    "family": "auth",
+    "identifier": "req_auth_09",
+    "message": "请求 req_auth_09 返回 401，帮我排查",
+    "expected_cause": "malformed_header"
+  },
+  {
+    "family": "auth",
+    "identifier": "req_auth_10",
+    "message": "请求 req_auth_10 返回 401，帮我排查",
+    "expected_cause": "expired_key"
+  },
+  {
+    "family": "quota",
+    "identifier": "req_quota_01",
+    "message": "请求 req_quota_01 遇到 429，如何处理",
+    "expected_cause": "minute_quota_exceeded"
+  },
+  {
+    "family": "quota",
+    "identifier": "req_quota_02",
+    "message": "请求 req_quota_02 遇到 429，如何处理",
+    "expected_cause": "minute_quota_exceeded"
+  },
+  {
+    "family": "quota",
+    "identifier": "req_quota_03",
+    "message": "请求 req_quota_03 遇到 429，如何处理",
+    "expected_cause": "minute_quota_exceeded"
+  },
+  {
+    "family": "quota",
+    "identifier": "req_quota_04",
+    "message": "请求 req_quota_04 遇到 429，如何处理",
+    "expected_cause": "minute_quota_exceeded"
+  },
+  {
+    "family": "quota",
+    "identifier": "req_quota_05",
+    "message": "请求 req_quota_05 遇到 429，如何处理",
+    "expected_cause": "minute_quota_exceeded"
+  },
+  {
+    "family": "quota",
+    "identifier": "req_quota_06",
+    "message": "请求 req_quota_06 遇到 429，如何处理",
+    "expected_cause": "minute_quota_exceeded"
+  },
+  {
+    "family": "quota",
+    "identifier": "req_quota_07",
+    "message": "请求 req_quota_07 遇到 429，如何处理",
+    "expected_cause": "minute_quota_exceeded"
+  },
+  {
+    "family": "quota",
+    "identifier": "req_quota_08",
+    "message": "请求 req_quota_08 遇到 429，如何处理",
+    "expected_cause": "minute_quota_exceeded"
+  },
+  {
+    "family": "quota",
+    "identifier": "req_quota_09",
+    "message": "请求 req_quota_09 遇到 429，如何处理",
+    "expected_cause": "minute_quota_exceeded"
+  },
+  {
+    "family": "quota",
+    "identifier": "req_quota_10",
+    "message": "请求 req_quota_10 遇到 429，如何处理",
+    "expected_cause": "minute_quota_exceeded"
+  },
+  {
+    "family": "webhook",
+    "identifier": "delivery_01",
+    "message": "Webhook 投递 delivery_01 失败，请排查",
+    "expected_cause": null
+  },
+  {
+    "family": "webhook",
+    "identifier": "delivery_02",
+    "message": "Webhook 投递 delivery_02 失败，请排查",
+    "expected_cause": null
+  },
+  {
+    "family": "webhook",
+    "identifier": "delivery_03",
+    "message": "Webhook 投递 delivery_03 失败，请排查",
+    "expected_cause": null
+  },
+  {
+    "family": "webhook",
+    "identifier": "delivery_04",
+    "message": "Webhook 投递 delivery_04 失败，请排查",
+    "expected_cause": null
+  },
+  {
+    "family": "webhook",
+    "identifier": "delivery_05",
+    "message": "Webhook 投递 delivery_05 失败，请排查",
+    "expected_cause": null
+  },
+  {
+    "family": "webhook",
+    "identifier": "delivery_06",
+    "message": "Webhook 投递 delivery_06 失败，请排查",
+    "expected_cause": null
+  },
+  {
+    "family": "webhook",
+    "identifier": "delivery_07",
+    "message": "Webhook 投递 delivery_07 失败，请排查",
+    "expected_cause": null
+  },
+  {
+    "family": "webhook",
+    "identifier": "delivery_08",
+    "message": "Webhook 投递 delivery_08 失败，请排查",
+    "expected_cause": null
+  },
+  {
+    "family": "webhook",
+    "identifier": "delivery_09",
+    "message": "Webhook 投递 delivery_09 失败，请排查",
+    "expected_cause": null
+  },
+  {
+    "family": "webhook",
+    "identifier": "delivery_10",
+    "message": "Webhook 投递 delivery_10 失败，请排查",
+    "expected_cause": null
+  }
+]

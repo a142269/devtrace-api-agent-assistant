@@ -110,13 +110,29 @@ class DeveloperAssistantTests(unittest.IsolatedAsyncioTestCase):
             with self.subTest(case=case["identifier"]):
                 result = await self.assistant.run(case["message"], "u-eval")
                 self.assertEqual(result["plan"]["status"], "complete")
-                self.assertEqual([a["tool"] for a in result["actions"]], case["expected_tools"])
+                expected = case['expected_tools']
+                if case['family'] == 'auth' and int(case['identifier'][-2:]) % 3 == 0:
+                    expected = [tool for tool in expected if tool != 'inspect_key_scope']
+                self.assertEqual([a["tool"] for a in result["actions"]], expected)
                 self.assertTrue(all(a["success"] for a in result["actions"]))
                 self.assertTrue(any(case["identifier"] in source for source in result["evidence"]))
                 self.assertIn("模拟平台", result["answer"])
                 self.assertEqual(result["decision_mode"], "rules")
                 self.assertEqual(result["timeline"][0]["type"], "plan")
                 self.assertTrue(any(source.startswith("doc:v1 /") for source in result["evidence"]))
+
+    async def test_scope_check_is_selected_from_observation(self):
+        class MinimalPlan(RuleDecisionModel):
+            async def make_plan(self, message, memory, previous=None):
+                return {'kind': 'auth', 'goal': '排查认证', 'tools': ['get_request_trace', 'search_api_docs']}
+        self.assistant.model = MinimalPlan()
+        header = await self.assistant.run('req_auth_03 返回 401', 'dynamic-header')
+        expired = await self.assistant.run('req_auth_01 返回 401', 'dynamic-expired')
+        self.assertNotIn('inspect_key_scope', [a['tool'] for a in header['actions']])
+        self.assertIn('inspect_key_scope', [a['tool'] for a in expired['actions']])
+        self.assertEqual(header['diagnosis']['hypotheses'][0]['code'], 'malformed_header')
+        self.assertEqual(expired['diagnosis']['hypotheses'][0]['code'], 'expired_key')
+        self.assertTrue(expired['diagnosis']['hypotheses'][0]['evidence'])
 
     async def test_missing_id_then_resume_and_user_isolation(self):
         first = await self.assistant.run("我的 API 返回 401，请帮我查", "u1")

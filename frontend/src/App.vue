@@ -2,9 +2,20 @@
   <main class="app-shell app-shell-developer">
     <header class="topbar">
       <a class="brand" href="#" aria-label="DevTrace 首页"><span class="brand-mark">D</span><span class="brand-name">DevTrace</span></a>
-      <div class="topbar-tools"><span class="environment-pill"><i :class="developerHealthOk ? 'online' : 'offline'"></i>模拟平台 · {{ developerHealthOk ? '已连接' : '未连接' }}</span><a class="docs-link" :href="developerDocsUrl" target="_blank" rel="noreferrer">API 文档</a></div>
+      <div class="topbar-tools"><span class="environment-pill"><i :class="developerHealthOk ? 'online' : 'offline'"></i>模拟平台 · {{ developerHealthOk ? '已连接' : '未连接' }}</span><a class="docs-link" :href="developerDocsUrl" target="_blank" rel="noreferrer">API 文档</a><button v-if="token" class="quiet-button" @click="logout">退出登录</button></div>
     </header>
-    <section class="page page-developer">
+    <section v-if="!token" class="page page-developer">
+      <div class="workspace-card" style="max-width: 440px; margin: 4rem auto; padding: 2rem">
+        <h1>登录 DevTrace</h1><p>使用管理员在本地配置的演示账号。</p>
+        <form class="composer" @submit.prevent="signIn">
+          <input v-model="username" autocomplete="username" placeholder="用户名" required>
+          <input v-model="password" type="password" autocomplete="current-password" placeholder="密码" required>
+          <p v-if="loginError" role="alert">{{ loginError }}</p>
+          <button type="submit" :disabled="loginBusy">{{ loginBusy ? '登录中' : '登录' }}</button>
+        </form>
+      </div>
+    </section>
+    <section v-else class="page page-developer">
       <div class="page-heading">
         <div class="heading-copy">
           <span class="kicker">Developer support lab</span>
@@ -13,7 +24,7 @@
         </div>
         <div class="heading-actions">
           <span class="session-label">{{ settings.developerConversationId || '新会话' }}</span>
-          <button class="quiet-button" @click="clearDeveloperConversation">清空</button>
+          <button class="quiet-button" :disabled="developerBusy" @click="clearDeveloperConversation">清空</button>
         </div>
       </div>
       <div class="developer-layout">
@@ -40,7 +51,8 @@
               @keydown.meta.enter.prevent="sendDeveloperMessage" @keydown.ctrl.enter.prevent="sendDeveloperMessage"></textarea>
             <div class="composer-bottom">
               <span>支持跨轮补充信息；创建工单需明确提出</span>
-              <button type="submit" :disabled="developerBusy || !developerDraft.trim()">{{ developerBusy ? '排查中' : '发送' }}</button>
+              <button v-if="developerBusy" type="button" @click="cancelRun">停止本次请求</button>
+              <button v-else type="submit" :disabled="!developerDraft.trim()">发送</button>
             </div>
           </form>
         </section>
@@ -48,7 +60,7 @@
           <section class="workspace-card">
             <div class="card-heading"><div><span class="kicker">Plan</span><h2>执行计划</h2></div><strong>{{ developerLast?.plan?.status || '待开始' }}</strong></div>
             <p v-if="developerLast?.plan?.goal" class="developer-goal">{{ developerLast.plan.goal }}</p>
-            <p v-if="developerLast" class="developer-goal">决策来源：{{ developerLast.decision_mode === 'model' ? '配置模型' : developerLast.decision_mode === 'rules_fallback' ? '规则降级（模型决策未完成）' : '本地规则模型' }}</p>
+            <p v-if="developerLast?.decision_mode" class="developer-goal">决策来源：{{ developerLast.decision_mode === 'model' ? '配置模型' : developerLast.decision_mode === 'rules_fallback' ? '规则降级（模型决策未完成）' : '本地规则模型' }}</p>
             <p v-if="developerLast?.plan?.proposed_tools?.length" class="developer-goal">计划提议：{{ developerLast.plan.proposed_tools.join(' → ') }}</p>
             <p v-if="developerLast?.plan?.approved_tools?.length" class="developer-goal">批准计划：{{ developerLast.plan.approved_tools.join(' → ') }}</p>
             <p v-for="(adjustment, index) in developerLast?.plan?.adjustments || []" :key="`adjustment-${index}`" class="developer-goal">约束调整：{{ adjustment }}</p>
@@ -81,6 +93,9 @@
           </section>
           <section class="workspace-card">
             <div class="card-heading"><div><span class="kicker">Evidence</span><h2>证据引用</h2></div></div>
+            <div v-for="item in developerLast?.diagnosis?.hypotheses || []" :key="item.code" class="developer-goal">
+              <strong>{{ item.description }}</strong> · {{ item.status }}<br>依据：{{ item.evidence.join('、') }}
+            </div>
             <ul v-if="developerLast?.evidence?.length" class="developer-evidence">
               <li v-for="(source, index) in developerLast.evidence" :key="`${source}-${index}`">{{ source }}</li>
             </ul>
@@ -105,34 +120,52 @@
 </template>
 <script setup>
 import { computed, nextTick, onMounted, reactive, ref, watch } from 'vue'
-import { backendMeta, createInitialSettings, requestDeveloperChat, requestHealth, saveSettings } from './lib/backends'
+import { backendMeta, createInitialSettings, login, requestDeveloperChat, requestHealth, saveSettings } from './lib/backends'
 const settings = reactive(createInitialSettings())
+const token = ref('')
+const username = ref('')
+const password = ref('')
+const loginError = ref('')
+const loginBusy = ref(false)
 const developerMessages = ref([])
 const developerDraft = ref('')
 const developerBusy = ref(false)
 const developerLast = ref(null)
 const developerMessageList = ref(null)
+let currentController = null
 const developerHealthOk = ref(false)
 const developerDocsUrl = computed(() => `${backendMeta('python', settings).baseUrl}/docs`)
 let messageSequence = 0
 watch(() => settings.developerConversationId, () => saveSettings(settings))
 onMounted(async () => { try { developerHealthOk.value = (await requestHealth('python', settings)).status === 'ok' } catch { developerHealthOk.value = false } })
+async function signIn() {
+  loginBusy.value = true; loginError.value = ''
+  try { const result = await login(settings, username.value, password.value); clearDeveloperConversation(); token.value = result.access_token; password.value = '' }
+  catch (error) { loginError.value = error.message }
+  finally { loginBusy.value = false }
+}
+function logout() { currentController?.abort(); token.value = ''; password.value = ''; clearDeveloperConversation() }
+function cancelRun() { currentController?.abort() }
 function clearDeveloperConversation() { developerMessages.value = []; developerLast.value = null; settings.developerConversationId = '' }
 async function sendDeveloperMessage() {
   const content = developerDraft.value.trim()
   if (!content || developerBusy.value) return
   developerMessages.value.push({ id: ++messageSequence, role: 'user', content })
   developerDraft.value = ''; developerBusy.value = true
+  currentController = new AbortController()
+  developerLast.value = { timeline: [] }
   try {
-    const response = await requestDeveloperChat(settings, content)
+    const response = await requestDeveloperChat(settings, content, token.value, crypto.randomUUID(),
+      event => developerLast.value?.timeline?.push(event), currentController.signal)
     developerHealthOk.value = true
     if (response.conversation_id) settings.developerConversationId = response.conversation_id
     developerLast.value = response
     developerMessages.value.push({ id: ++messageSequence, role: 'assistant', content: response.answer, runId: response.run_id })
   } catch (error) {
-    developerHealthOk.value = false
-    developerMessages.value.push({ id: ++messageSequence, role: 'assistant', content: error.message })
+    if (error.name !== 'AbortError') developerHealthOk.value = false
+    developerMessages.value.push({ id: ++messageSequence, role: 'assistant', content: error.name === 'AbortError' ? '已停止本次请求；如需继续请重新发送。' : error.message })
   } finally {
+    currentController = null
     developerBusy.value = false
     await nextTick()
     developerMessageList.value?.scrollTo({ top: developerMessageList.value.scrollHeight, behavior: 'smooth' })

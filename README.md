@@ -37,12 +37,16 @@ frontend/  Vue 3 + Vite 对话页，展示计划、行动、证据和记忆使�
 
 ### 本地运行
 
-1. 复制 `backend/.env.example` 为 `backend/.env`，填写自己的模型 API Key。
-2. 在 `backend/` 执行 `docker compose up -d --build`。
-3. 在 `frontend/` 执行 `npm ci && npm run dev`。
-4. 打开前端即可使用 `req_auth_01`、`req_quota_01` 或 `delivery_01` 演示。
+1. 在 `backend/` 执行 `python setup_local.py`，创建本地演示账号和密钥配置；已有 `.env` 不会覆盖。
+2. 使用真实模型时在本地 `backend/.env` 填写模型 API Key；规则模式可设置 `DEVELOPER_MODEL_MODE=rules`。
+3. 在 `backend/` 执行 `docker compose up -d --build`。
+4. 在 `frontend/` 执行 `npm ci && npm run dev`。
+5. 登录后使用 `req_auth_01`、`req_quota_01` 或 `delivery_01` 演示。
+
+接口使用本地配置账号登录并签发短期 JWT，身份由服务端验证；同一用户的会话通过 Redis 锁防止并发覆盖，重复请求可携带 `Idempotency-Key`。模拟平台仅在 Compose 内部网络访问。当前实现仍是本地演示：尚不具备生产身份服务、持久任务队列或真实业务权限。
 
 详细设计、工程审查、评测原始结果见 [backend/developer](backend/developer)。
+本轮优化的实现范围、测试结果和剩余工作见 [升级进度](backend/developer/升级进度.md)。
 
 ## English
 

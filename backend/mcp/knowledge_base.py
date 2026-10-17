@@ -138,6 +138,21 @@ class KnowledgeBase:
         """异步检索；ChromaDB 客户端为同步实现，因此放入线程池执行。"""
         return await asyncio.to_thread(self.search, query, top_k)
 
+    def search_hybrid(self, query: str, top_k: int = 5, version: str = 'v1') -> List[Dict[str, Any]]:
+        from developer.retrieval import fuse, lexical_rank
+        # Demo corpus is small; collection.get is bounded to avoid unbounded scans.
+        raw = self._collection.get(limit=1000, include=['documents', 'metadatas'])
+        documents = [{'title': meta.get('title', ''), 'content': doc,
+                      'chunk': meta.get('chunk_index', 0)}
+                     for doc, meta in zip(raw.get('documents') or [], raw.get('metadatas') or [])
+                     if str(meta.get('title', '')).lower().startswith(version.lower() + ' /')]
+        dense = [item for item in self.search(query, top_k=min(max(top_k * 3, 4), 100))
+                 if item.get('title', '').lower().startswith(version.lower() + ' /')]
+        return fuse(dense, lexical_rank(query, documents), top_k)
+
+    async def search_hybrid_async(self, query: str, top_k: int = 5, version: str = 'v1') -> List[Dict[str, Any]]:
+        return await asyncio.to_thread(self.search_hybrid, query, top_k, version)
+
     @property
     def doc_count(self) -> int:
         return self._collection.count()

@@ -49,7 +49,10 @@ def _approved_tools(kind: str, proposed: Any) -> tuple[list[str], list[str], lis
     adjustments = []
     if any(tool not in allowed for tool in raw):
         adjustments.append("移除不属于该故障类型的工具")
-    for tool in allowed:
+    # Require evidence targets, not a fixed set of tools. Scope inspection is
+    # conditional on the observed request; it can be added after the trace.
+    mandatory = [tool for tool in allowed if tool != 'inspect_key_scope']
+    for tool in mandatory:
         if tool not in chosen:
             chosen.append(tool)
             adjustments.append(f"补充必需证据工具 {tool}")
@@ -64,13 +67,13 @@ def _approved_tools(kind: str, proposed: Any) -> tuple[list[str], list[str], lis
 
 
 def _ready_steps(state: Dict[str, Any]) -> list[Dict[str, Any]]:
-    completed = {step["tool"] for step in state["steps"] if step["status"] == "done"}
+    completed = {step["tool"] for step in state["steps"] if step["status"] in {"done", "skipped"}}
     ready = []
     for step in state["steps"]:
         if step["status"] != "pending":
             continue
         tool = step["tool"]
-        dependencies = (set(KIND_TO_TOOLS[state["kind"]]) if tool == "create_support_ticket"
+        dependencies = ({item['tool'] for item in state['steps'] if item['tool'] and item['tool'] != 'create_support_ticket'} if tool == "create_support_ticket"
                         else TOOL_DEPENDENCIES.get(tool, set()))
         if not dependencies.issubset(completed):
             continue
@@ -214,7 +217,7 @@ class AnthropicDecisionModel(RuleDecisionModel):
                 "根据问题生成可执行的多步计划。只允许 kind=auth/quota/webhook；对应工具分别是 "
                 "auth:[search_api_docs,get_request_trace,inspect_key_scope], "
                 "quota:[search_api_docs,get_request_trace], webhook:[search_api_docs,get_webhook_delivery]。"
-                "tools 必须覆盖该故障类型的全部取证工具，可根据已有标识和问题线索调整顺序；"
+                "先核验记录与文档，权限工具是否需要可依观察调整；"
                 "鉴权权限摘要必须在请求记录之后。"
                 "返回 {\"kind\":...,\"goal\":...,\"tools\":[...]}。"
                 f"\n用户消息：{message[:1000]}\n历史摘要：{memory[:1200]}"
@@ -280,7 +283,10 @@ class DeveloperAssistant:
     def _register_tools(self) -> None:
         async def docs(params, _context):
             query = params["query"]
-            results = await self.knowledge.search_async(query, top_k=4)
+            if hasattr(self.knowledge, 'search_hybrid_async'):
+                results = await self.knowledge.search_hybrid_async(query, top_k=4, version='v1')
+            else:
+                results = await self.knowledge.search_async(query, top_k=4)
             kind_match = re.match(r"^v1\s+(auth|quota|webhook)\b", query, re.I)
             titles = {"auth": "鉴权", "quota": "速率限制", "webhook": "Webhook"}
             if not kind_match:
@@ -384,6 +390,8 @@ class DeveloperAssistant:
                 state["timeline"].append({"type": "fallback", "text": "模型规划不可用，已采用规则计划"})
         if issue_id:
             state["issue_id"] = issue_id
+        from developer.events import publish_existing
+        state['timeline'] = publish_existing(state['timeline'])
         ticket_cancelled = bool(TICKET_CANCEL_RE.search(message))
         ticket_requested_now = bool(TICKET_RE.search(message)) and not ticket_cancelled
         if ticket_requested_now and not any(step["tool"] == "create_support_ticket" for step in state["steps"]):
@@ -475,6 +483,20 @@ class DeveloperAssistant:
                     )
                 if tool == "get_request_trace" and isinstance(data, dict):
                     state["key_prefix"] = data.get("key_prefix", "")
+                    if (state['kind'] == 'auth' and data.get('reason_code') in {'expired_key', 'missing_scope'}
+                            and not any(item['tool'] == 'inspect_key_scope' for item in state['steps'])):
+                        new_step = {'id': f"s{len(state['steps']) + 1}", 'title': TOOL_TITLES['inspect_key_scope'],
+                                    'tool': 'inspect_key_scope', 'required_evidence': TOOL_EVIDENCE['inspect_key_scope'], 'status': 'pending'}
+                        state['steps'].append(new_step)
+                        state['approved_tools'].append('inspect_key_scope')
+                        state['timeline'].append({'type': 'decision', 'text': '请求记录显示需核对密钥状态或权限，追加检查', 'step_id': new_step['id']})
+                    # A verified malformed header already explains the rejection. Scope
+                    # inspection is useful only when that observation does not settle it.
+                    if state['kind'] == 'auth' and data.get('reason_code') == 'malformed_header':
+                        for candidate in state['steps']:
+                            if candidate['tool'] == 'inspect_key_scope' and candidate['status'] == 'pending':
+                                candidate['status'] = 'skipped'
+                                state['timeline'].append({'type': 'decision', 'text': '请求记录已确认认证头格式错误，跳过权限检查', 'step_id': candidate['id']})
                 if tool == "create_support_ticket" and isinstance(data, dict):
                     state["ticket_id"] = data.get("ticket_id")
             else:
@@ -526,13 +548,18 @@ class DeveloperAssistant:
             "ticket_id": state.get("ticket_id"), "mock": True,
             "decision_mode": decision_mode,
         }
+        from developer.verifier import build_diagnosis
+        response['diagnosis'] = build_diagnosis(state['kind'], state['actions'])
         await self.redis.setex(state_key, 86400, json.dumps(state, ensure_ascii=False))
         await self.redis.setex(f"developer:run:{run_id}", 86400,
                                json.dumps({"user_id": user_id, "response": response}, ensure_ascii=False))
         await self.memory.add_message(user_id, conversation_id, MsgRole.USER, message)
         await self.memory.add_message(user_id, conversation_id, MsgRole.ASSISTANT, answer)
         if isinstance(self.model, AnthropicDecisionModel):
-            asyncio.create_task(self.memory.update_profile(user_id, conversation_id))
+            try:
+                await asyncio.wait_for(self.memory.update_profile(user_id, conversation_id), timeout=10)
+            except (asyncio.TimeoutError, Exception):
+                logger.warning('画像更新失败或超时；本轮诊断结果仍可查询')
         return response
 
     @staticmethod

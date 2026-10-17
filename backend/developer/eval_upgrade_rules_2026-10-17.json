@@ -1,0 +1,501 @@
+{
+  "mode": "rules",
+  "base_url": "http://127.0.0.1:8000",
+  "count": 30,
+  "passed": 30,
+  "fallbacks": 0,
+  "diagnosis_correct": 20,
+  "diagnosis_applicable": 20,
+  "evidence_supported": 30,
+  "mean_tool_calls": 2.23,
+  "median_elapsed_ms": 73.2,
+  "cases": [
+    {
+      "case": "req_auth_01",
+      "family": "auth",
+      "passed": true,
+      "reasons": [],
+      "decision_mode": "rules",
+      "tool_order": [
+        "search_api_docs",
+        "get_request_trace",
+        "inspect_key_scope"
+      ],
+      "tool_actions": 3,
+      "plan_adjustments": [],
+      "diagnosis_correct": true,
+      "evidence_supported": true,
+      "elapsed_ms": 115.2
+    },
+    {
+      "case": "req_auth_02",
+      "family": "auth",
+      "passed": true,
+      "reasons": [],
+      "decision_mode": "rules",
+      "tool_order": [
+        "search_api_docs",
+        "get_request_trace",
+        "inspect_key_scope"
+      ],
+      "tool_actions": 3,
+      "plan_adjustments": [],
+      "diagnosis_correct": true,
+      "evidence_supported": true,
+      "elapsed_ms": 123.7
+    },
+    {
+      "case": "req_auth_03",
+      "family": "auth",
+      "passed": true,
+      "reasons": [],
+      "decision_mode": "rules",
+      "tool_order": [
+        "search_api_docs",
+        "get_request_trace"
+      ],
+      "tool_actions": 2,
+      "plan_adjustments": [],
+      "diagnosis_correct": true,
+      "evidence_supported": true,
+      "elapsed_ms": 69.1
+    },
+    {
+      "case": "req_auth_04",
+      "family": "auth",
+      "passed": true,
+      "reasons": [],
+      "decision_mode": "rules",
+      "tool_order": [
+        "search_api_docs",
+        "get_request_trace",
+        "inspect_key_scope"
+      ],
+      "tool_actions": 3,
+      "plan_adjustments": [],
+      "diagnosis_correct": true,
+      "evidence_supported": true,
+      "elapsed_ms": 73.0
+    },
+    {
+      "case": "req_auth_05",
+      "family": "auth",
+      "passed": true,
+      "reasons": [],
+      "decision_mode": "rules",
+      "tool_order": [
+        "search_api_docs",
+        "get_request_trace",
+        "inspect_key_scope"
+      ],
+      "tool_actions": 3,
+      "plan_adjustments": [],
+      "diagnosis_correct": true,
+      "evidence_supported": true,
+      "elapsed_ms": 76.3
+    },
+    {
+      "case": "req_auth_06",
+      "family": "auth",
+      "passed": true,
+      "reasons": [],
+      "decision_mode": "rules",
+      "tool_order": [
+        "search_api_docs",
+        "get_request_trace"
+      ],
+      "tool_actions": 2,
+      "plan_adjustments": [],
+      "diagnosis_correct": true,
+      "evidence_supported": true,
+      "elapsed_ms": 65.4
+    },
+    {
+      "case": "req_auth_07",
+      "family": "auth",
+      "passed": true,
+      "reasons": [],
+      "decision_mode": "rules",
+      "tool_order": [
+        "search_api_docs",
+        "get_request_trace",
+        "inspect_key_scope"
+      ],
+      "tool_actions": 3,
+      "plan_adjustments": [],
+      "diagnosis_correct": true,
+      "evidence_supported": true,
+      "elapsed_ms": 71.8
+    },
+    {
+      "case": "req_auth_08",
+      "family": "auth",
+      "passed": true,
+      "reasons": [],
+      "decision_mode": "rules",
+      "tool_order": [
+        "search_api_docs",
+        "get_request_trace",
+        "inspect_key_scope"
+      ],
+      "tool_actions": 3,
+      "plan_adjustments": [],
+      "diagnosis_correct": true,
+      "evidence_supported": true,
+      "elapsed_ms": 80.6
+    },
+    {
+      "case": "req_auth_09",
+      "family": "auth",
+      "passed": true,
+      "reasons": [],
+      "decision_mode": "rules",
+      "tool_order": [
+        "search_api_docs",
+        "get_request_trace"
+      ],
+      "tool_actions": 2,
+      "plan_adjustments": [],
+      "diagnosis_correct": true,
+      "evidence_supported": true,
+      "elapsed_ms": 68.8
+    },
+    {
+      "case": "req_auth_10",
+      "family": "auth",
+      "passed": true,
+      "reasons": [],
+      "decision_mode": "rules",
+      "tool_order": [
+        "search_api_docs",
+        "get_request_trace",
+        "inspect_key_scope"
+      ],
+      "tool_actions": 3,
+      "plan_adjustments": [],
+      "diagnosis_correct": true,
+      "evidence_supported": true,
+      "elapsed_ms": 75.3
+    },
+    {
+      "case": "req_quota_01",
+      "family": "quota",
+      "passed": true,
+      "reasons": [],
+      "decision_mode": "rules",
+      "tool_order": [
+        "search_api_docs",
+        "get_request_trace"
+      ],
+      "tool_actions": 2,
+      "plan_adjustments": [],
+      "diagnosis_correct": true,
+      "evidence_supported": true,
+      "elapsed_ms": 68.5
+    },
+    {
+      "case": "req_quota_02",
+      "family": "quota",
+      "passed": true,
+      "reasons": [],
+      "decision_mode": "rules",
+      "tool_order": [
+        "search_api_docs",
+        "get_request_trace"
+      ],
+      "tool_actions": 2,
+      "plan_adjustments": [],
+      "diagnosis_correct": true,
+      "evidence_supported": true,
+      "elapsed_ms": 67.3
+    },
+    {
+      "case": "req_quota_03",
+      "family": "quota",
+      "passed": true,
+      "reasons": [],
+      "decision_mode": "rules",
+      "tool_order": [
+        "search_api_docs",
+        "get_request_trace"
+      ],
+      "tool_actions": 2,
+      "plan_adjustments": [],
+      "diagnosis_correct": true,
+      "evidence_supported": true,
+      "elapsed_ms": 67.1
+    },
+    {
+      "case": "req_quota_04",
+      "family": "quota",
+      "passed": true,
+      "reasons": [],
+      "decision_mode": "rules",
+      "tool_order": [
+        "search_api_docs",
+        "get_request_trace"
+      ],
+      "tool_actions": 2,
+      "plan_adjustments": [],
+      "diagnosis_correct": true,
+      "evidence_supported": true,
+      "elapsed_ms": 80.5
+    },
+    {
+      "case": "req_quota_05",
+      "family": "quota",
+      "passed": true,
+      "reasons": [],
+      "decision_mode": "rules",
+      "tool_order": [
+        "search_api_docs",
+        "get_request_trace"
+      ],
+      "tool_actions": 2,
+      "plan_adjustments": [],
+      "diagnosis_correct": true,
+      "evidence_supported": true,
+      "elapsed_ms": 77.8
+    },
+    {
+      "case": "req_quota_06",
+      "family": "quota",
+      "passed": true,
+      "reasons": [],
+      "decision_mode": "rules",
+      "tool_order": [
+        "search_api_docs",
+        "get_request_trace"
+      ],
+      "tool_actions": 2,
+      "plan_adjustments": [],
+      "diagnosis_correct": true,
+      "evidence_supported": true,
+      "elapsed_ms": 63.0
+    },
+    {
+      "case": "req_quota_07",
+      "family": "quota",
+      "passed": true,
+      "reasons": [],
+      "decision_mode": "rules",
+      "tool_order": [
+        "search_api_docs",
+        "get_request_trace"
+      ],
+      "tool_actions": 2,
+      "plan_adjustments": [],
+      "diagnosis_correct": true,
+      "evidence_supported": true,
+      "elapsed_ms": 73.4
+    },
+    {
+      "case": "req_quota_08",
+      "family": "quota",
+      "passed": true,
+      "reasons": [],
+      "decision_mode": "rules",
+      "tool_order": [
+        "search_api_docs",
+        "get_request_trace"
+      ],
+      "tool_actions": 2,
+      "plan_adjustments": [],
+      "diagnosis_correct": true,
+      "evidence_supported": true,
+      "elapsed_ms": 67.7
+    },
+    {
+      "case": "req_quota_09",
+      "family": "quota",
+      "passed": true,
+      "reasons": [],
+      "decision_mode": "rules",
+      "tool_order": [
+        "search_api_docs",
+        "get_request_trace"
+      ],
+      "tool_actions": 2,
+      "plan_adjustments": [],
+      "diagnosis_correct": true,
+      "evidence_supported": true,
+      "elapsed_ms": 68.5
+    },
+    {
+      "case": "req_quota_10",
+      "family": "quota",
+      "passed": true,
+      "reasons": [],
+      "decision_mode": "rules",
+      "tool_order": [
+        "search_api_docs",
+        "get_request_trace"
+      ],
+      "tool_actions": 2,
+      "plan_adjustments": [],
+      "diagnosis_correct": true,
+      "evidence_supported": true,
+      "elapsed_ms": 69.7
+    },
+    {
+      "case": "delivery_01",
+      "family": "webhook",
+      "passed": true,
+      "reasons": [],
+      "decision_mode": "rules",
+      "tool_order": [
+        "search_api_docs",
+        "get_webhook_delivery"
+      ],
+      "tool_actions": 2,
+      "plan_adjustments": [],
+      "diagnosis_correct": null,
+      "evidence_supported": true,
+      "elapsed_ms": 81.8
+    },
+    {
+      "case": "delivery_02",
+      "family": "webhook",
+      "passed": true,
+      "reasons": [],
+      "decision_mode": "rules",
+      "tool_order": [
+        "search_api_docs",
+        "get_webhook_delivery"
+      ],
+      "tool_actions": 2,
+      "plan_adjustments": [],
+      "diagnosis_correct": null,
+      "evidence_supported": true,
+      "elapsed_ms": 78.7
+    },
+    {
+      "case": "delivery_03",
+      "family": "webhook",
+      "passed": true,
+      "reasons": [],
+      "decision_mode": "rules",
+      "tool_order": [
+        "search_api_docs",
+        "get_webhook_delivery"
+      ],
+      "tool_actions": 2,
+      "plan_adjustments": [],
+      "diagnosis_correct": null,
+      "evidence_supported": true,
+      "elapsed_ms": 73.9
+    },
+    {
+      "case": "delivery_04",
+      "family": "webhook",
+      "passed": true,
+      "reasons": [],
+      "decision_mode": "rules",
+      "tool_order": [
+        "search_api_docs",
+        "get_webhook_delivery"
+      ],
+      "tool_actions": 2,
+      "plan_adjustments": [],
+      "diagnosis_correct": null,
+      "evidence_supported": true,
+      "elapsed_ms": 73.9
+    },
+    {
+      "case": "delivery_05",
+      "family": "webhook",
+      "passed": true,
+      "reasons": [],
+      "decision_mode": "rules",
+      "tool_order": [
+        "search_api_docs",
+        "get_webhook_delivery"
+      ],
+      "tool_actions": 2,
+      "plan_adjustments": [],
+      "diagnosis_correct": null,
+      "evidence_supported": true,
+      "elapsed_ms": 68.6
+    },
+    {
+      "case": "delivery_06",
+      "family": "webhook",
+      "passed": true,
+      "reasons": [],
+      "decision_mode": "rules",
+      "tool_order": [
+        "search_api_docs",
+        "get_webhook_delivery"
+      ],
+      "tool_actions": 2,
+      "plan_adjustments": [],
+      "diagnosis_correct": null,
+      "evidence_supported": true,
+      "elapsed_ms": 75.9
+    },
+    {
+      "case": "delivery_07",
+      "family": "webhook",
+      "passed": true,
+      "reasons": [],
+      "decision_mode": "rules",
+      "tool_order": [
+        "search_api_docs",
+        "get_webhook_delivery"
+      ],
+      "tool_actions": 2,
+      "plan_adjustments": [],
+      "diagnosis_correct": null,
+      "evidence_supported": true,
+      "elapsed_ms": 162.9
+    },
+    {
+      "case": "delivery_08",
+      "family": "webhook",
+      "passed": true,
+      "reasons": [],
+      "decision_mode": "rules",
+      "tool_order": [
+        "search_api_docs",
+        "get_webhook_delivery"
+      ],
+      "tool_actions": 2,
+      "plan_adjustments": [],
+      "diagnosis_correct": null,
+      "evidence_supported": true,
+      "elapsed_ms": 67.9
+    },
+    {
+      "case": "delivery_09",
+      "family": "webhook",
+      "passed": true,
+      "reasons": [],
+      "decision_mode": "rules",
+      "tool_order": [
+        "search_api_docs",
+        "get_webhook_delivery"
+      ],
+      "tool_actions": 2,
+      "plan_adjustments": [],
+      "diagnosis_correct": null,
+      "evidence_supported": true,
+      "elapsed_ms": 75.0
+    },
+    {
+      "case": "delivery_10",
+      "family": "webhook",
+      "passed": true,
+      "reasons": [],
+      "decision_mode": "rules",
+      "tool_order": [
+        "search_api_docs",
+        "get_webhook_delivery"
+      ],
+      "tool_actions": 2,
+      "plan_adjustments": [],
+      "diagnosis_correct": null,
+      "evidence_supported": true,
+      "elapsed_ms": 71.5
+    }
+  ]
+}

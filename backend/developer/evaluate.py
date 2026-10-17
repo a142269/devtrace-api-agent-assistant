@@ -7,27 +7,36 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import statistics
 import time
-import uuid
 from pathlib import Path
 
 import httpx
 
-from developer.data import EVAL_CASES
+EVAL_CASES = json.loads((Path(__file__).parent / 'eval_baseline_cases.json').read_text(encoding='utf-8'))
 
 
 def assess(case: dict, response: dict, expected_mode: str) -> dict:
     actions = response.get("actions") or []
     plan = response.get("plan") or {}
     actual_tools = [action.get("tool") for action in actions]
-    expected_tools = set(case["expected_tools"])
     evidence = response.get("evidence") or []
     reasons = []
     if plan.get("status") != "complete":
         reasons.append("plan_incomplete")
-    if set(actual_tools) != expected_tools or len(actual_tools) != len(expected_tools):
-        reasons.append("wrong_tool_set")
+    expected_code = case.get('expected_cause')
+    hypotheses = (response.get('diagnosis') or {}).get('hypotheses') or []
+    observed_sources = {item.get('source') for item in actions if item.get('success')}
+    supported = bool(hypotheses) and all(h.get('evidence') and set(h['evidence']).issubset(observed_sources) for h in hypotheses)
+    diagnosis_correct = (any(h.get('code') == expected_code and h.get('evidence') for h in hypotheses)
+                         if expected_code else None)
+    if expected_code and not diagnosis_correct:
+        reasons.append('missing_supported_diagnosis')
+    if not supported:
+        reasons.append('unsupported_diagnosis')
+    if len(actual_tools) != len(set(actual_tools)):
+        reasons.append('duplicate_tool_call')
     if not all(action.get("success") for action in actions):
         reasons.append("tool_failed")
     if not any(case["identifier"] in str(source) for source in evidence):
@@ -47,6 +56,7 @@ def assess(case: dict, response: dict, expected_mode: str) -> dict:
         "decision_mode": response.get("decision_mode"),
         "tool_order": actual_tools, "tool_actions": len(actions),
         "plan_adjustments": plan.get("adjustments") or [],
+        'diagnosis_correct': diagnosis_correct, 'evidence_supported': supported,
     }
 
 
@@ -60,7 +70,11 @@ def main() -> None:
     parser.add_argument("--sample-per-family", type=int, default=0,
                         help="Take the first N cases of each fault family before applying --limit")
     parser.add_argument("--output", type=Path)
+    parser.add_argument('--token-env', default='DEVTRACE_EVAL_TOKEN', help='Environment variable containing a bearer token')
     args = parser.parse_args()
+    token = os.getenv(args.token_env, '')
+    if not token:
+        parser.error(f'Set {args.token_env} to an access token; do not put it in the command line')
     source = EVAL_CASES
     if args.sample_per_family > 0:
         source = []
@@ -68,14 +82,13 @@ def main() -> None:
             source.extend([item for item in EVAL_CASES if item["family"] == family][:args.sample_per_family])
     cases = source[:max(0, min(args.limit, len(source)))]
     results = []
-    run_tag = uuid.uuid4().hex[:10]
-    with httpx.Client(base_url=args.base_url, timeout=args.timeout, trust_env=False) as client:
+    with httpx.Client(base_url=args.base_url, timeout=args.timeout, trust_env=False,
+                      headers={'Authorization': f'Bearer {token}'}) as client:
         for index, case in enumerate(cases):
             started = time.perf_counter()
             try:
                 response = client.post("/developer/chat", json={
                     "message": case["message"],
-                    "user_id": f"eval-{args.mode}-{run_tag}-{index}",
                 })
                 response.raise_for_status()
                 result = assess(case, response.json(), args.mode)
@@ -89,6 +102,10 @@ def main() -> None:
         "mode": args.mode, "base_url": args.base_url, "count": len(results),
         "passed": sum(result["passed"] for result in results),
         "fallbacks": sum(result.get("decision_mode") == "rules_fallback" for result in results),
+        'diagnosis_correct': sum(result.get('diagnosis_correct') is True for result in results),
+        'diagnosis_applicable': sum(result.get('diagnosis_correct') is not None for result in results),
+        'evidence_supported': sum(result.get('evidence_supported') is True for result in results),
+        'mean_tool_calls': round(statistics.mean(result.get('tool_actions', 0) for result in results), 2) if results else None,
         "median_elapsed_ms": round(statistics.median(result["elapsed_ms"] for result in results), 1) if results else None,
         "cases": results,
     }

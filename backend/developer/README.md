@@ -18,13 +18,13 @@
 
 ## API
 
-`POST /developer/chat` 请求示例：
+先用本地账号调用 `POST /auth/login`，在以下请求头中传入 `Authorization: Bearer <token>`。`POST /developer/chat` 请求示例：
 
 ```json
-{"message":"请求 req_auth_01 返回 401，帮我排查","user_id":"demo","conversation_id":null}
+{"message":"请求 req_auth_01 返回 401，帮我排查","conversation_id":null}
 ```
 
-响应包含 `conversation_id`、`run_id`、`answer`、`plan`（目标、模型提议、批准步骤、约束调整、状态）、`actions`（工具输入、观察摘要、状态和来源）、`timeline`、`evidence`、`memory_used`、可选 `ticket_id`、`decision_mode` 和 `mock=true`。`decision_mode` 为 `model`、`rules` 或 `rules_fallback`；模型调用失败或输出无法解析时明确标记降级。计划可能为 `waiting`：补充标识符后用同一 `conversation_id` 继续。`GET /developer/runs/{run_id}?user_id=demo` 查询运行记录；不同 `user_id` 不会读到该记录。
+响应包含 `conversation_id`、`run_id`、`answer`、`plan`、`actions`、`timeline`、`evidence`、`diagnosis`、`memory_used`、可选 `ticket_id` 和 `decision_mode`。`decision_mode` 区分 `model`、`rules` 和 `rules_fallback`。等待补充时可用同一 `conversation_id` 继续。`GET /developer/runs/{run_id}` 根据认证身份授权；客户端不能指定 `user_id`。
 
 ## 设计边界
 
@@ -32,13 +32,13 @@
 - 模型提出的合法工具顺序会影响批准计划；服务端补齐必需证据、修正依赖，并只允许从当前可执行步骤中选择行动。`plan.proposed_tools`、`approved_tools` 和 `adjustments` 可用于对照审查。最终答复由成功的工具观察整理生成。开发者工具是项目内注册与调用，并未提供独立 MCP 协议服务。
 - Redis 保存 24 小时计划状态和运行记录；开发者记忆使用独立键前缀、`developer_episodic` 和 `developer_profile` collection；文档位于独立的 `developer_knowledge` collection。
 - 回复、界面和工单均说明数据来自本地模拟平台；不接入真实开发者账号、生产日志或工单系统。
-- `GET /developer/runs` 仅以演示用户标识做隔离，部署到真实多用户环境前必须增加身份认证和授权。
+- JWT 仅提供本地演示身份，仍需生产身份服务、TLS、密钥轮换和真实业务权限。请求幂等结果在完成后缓存；进程在副作用与结果缓存之间崩溃时并不保证通用操作恰好一次。模拟工单自身另有去重。
 
 ## 验证
 
 `python -m unittest discover -s tests -p test_developer_assistant.py` 覆盖 30 条固定案例、跨轮恢复、错误标识后调整、工单去重、用户隔离与敏感信息脱敏。实测结果见 [evaluation_report.md](evaluation_report.md)；模型在线演示需要有效的模型 API Key。
 
-连接已启动的两个服务后，可以运行同一套 HTTP 判定器：
+登录取得短期 token 后，写入当前进程环境变量 `DEVTRACE_EVAL_TOKEN`，再运行 HTTP 判定器；不要把 token 写入仓库或命令历史：
 
 ```powershell
 python -m developer.evaluate --base-url http://localhost:18002 --mode rules --output developer/eval_rules.json

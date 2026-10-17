@@ -17,8 +17,9 @@ jobs:
         with:
           python-version: '3.12'
       - run: python -m pip install --upgrade pip
-      - run: pip install -r requirements.txt pytest
-      - run: python -m pytest -q tests/test_developer_assistant.py
+      - run: pip install -r requirements.txt pytest pytest-cov ruff
+      - run: ruff check --select F api/auth.py developer/retrieval.py developer/verifier.py tests/test_api_security.py tests/test_retrieval.py
+      - run: python -m pytest -q tests --cov=developer --cov=api --cov-report=term-missing
 
   frontend-build:
     runs-on: ubuntu-latest
