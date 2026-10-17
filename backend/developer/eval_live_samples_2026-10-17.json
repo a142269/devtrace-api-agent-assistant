@@ -1,0 +1,167 @@
+{
+  "model": "deepseek-v4-pro",
+  "count": 4,
+  "passed": 4,
+  "cases": [
+    {
+      "case": "req_auth_01",
+      "family": "auth",
+      "passed": true,
+      "reasons": [],
+      "decision_mode": "model",
+      "tool_order": [
+        "get_request_trace",
+        "search_api_docs",
+        "inspect_key_scope"
+      ],
+      "tool_actions": 3,
+      "plan_adjustments": [],
+      "diagnosis_correct": true,
+      "evidence_supported": true,
+      "metrics": {
+        "model": {
+          "calls": 4,
+          "errors": 0,
+          "latency_ms": 37020.7,
+          "input_tokens": 2933,
+          "output_tokens": 2998
+        },
+        "tool_calls": 3,
+        "tool_latency_ms": 2.2,
+        "elapsed_ms": 37029.8
+      },
+      "hypotheses": [
+        {
+          "code": "expired_key",
+          "description": "凭证已过期",
+          "status": "supported",
+          "evidence": [
+            "get_request_trace:req_auth_01"
+          ]
+        }
+      ]
+    },
+    {
+      "case": "req_quota_01",
+      "family": "quota",
+      "passed": true,
+      "reasons": [],
+      "decision_mode": "model",
+      "tool_order": [
+        "get_request_trace",
+        "search_api_docs"
+      ],
+      "tool_actions": 2,
+      "plan_adjustments": [],
+      "diagnosis_correct": true,
+      "evidence_supported": true,
+      "metrics": {
+        "model": {
+          "calls": 3,
+          "errors": 0,
+          "latency_ms": 26880.9,
+          "input_tokens": 1483,
+          "output_tokens": 2229
+        },
+        "tool_calls": 2,
+        "tool_latency_ms": 1.0,
+        "elapsed_ms": 26882.3
+      },
+      "hypotheses": [
+        {
+          "code": "minute_quota_exceeded",
+          "description": "分钟配额已用尽",
+          "status": "supported",
+          "evidence": [
+            "get_request_trace:req_quota_01"
+          ]
+        }
+      ]
+    },
+    {
+      "case": "delivery_01",
+      "family": "webhook",
+      "passed": true,
+      "reasons": [],
+      "decision_mode": "model",
+      "tool_order": [
+        "get_webhook_delivery",
+        "search_api_docs"
+      ],
+      "tool_actions": 2,
+      "plan_adjustments": [],
+      "diagnosis_correct": null,
+      "evidence_supported": true,
+      "metrics": {
+        "model": {
+          "calls": 3,
+          "errors": 0,
+          "latency_ms": 34385.6,
+          "input_tokens": 1485,
+          "output_tokens": 2916
+        },
+        "tool_calls": 2,
+        "tool_latency_ms": 0.8,
+        "elapsed_ms": 34386.9
+      },
+      "hypotheses": [
+        {
+          "code": "webhook_delivery_failed",
+          "description": "接收端拒绝签名",
+          "status": "observed",
+          "evidence": [
+            "get_webhook_delivery:delivery_01"
+          ]
+        }
+      ]
+    },
+    {
+      "case": "delivery_combo_01",
+      "family": "combined",
+      "passed": true,
+      "reasons": [],
+      "decision_mode": "model",
+      "tool_order": [
+        "search_api_docs",
+        "get_webhook_delivery",
+        "get_related_request_trace",
+        "search_quota_docs"
+      ],
+      "tool_actions": 4,
+      "plan_adjustments": [],
+      "diagnosis_correct": true,
+      "evidence_supported": true,
+      "metrics": {
+        "model": {
+          "calls": 5,
+          "errors": 0,
+          "latency_ms": 62229.2,
+          "input_tokens": 4471,
+          "output_tokens": 4934
+        },
+        "tool_calls": 4,
+        "tool_latency_ms": 1.6,
+        "elapsed_ms": 62231.7
+      },
+      "hypotheses": [
+        {
+          "code": "webhook_delivery_failed",
+          "description": "接收端暂不可用",
+          "status": "observed",
+          "evidence": [
+            "get_webhook_delivery:delivery_combo_01"
+          ]
+        },
+        {
+          "code": "minute_quota_exceeded",
+          "description": "分钟配额已用尽",
+          "status": "supported",
+          "evidence": [
+            "get_related_request_trace:req_quota_01"
+          ]
+        }
+      ]
+    }
+  ],
+  "limitations": "Four public examples, mock platform and simulated memory; no statistical or production generalization claim."
+}

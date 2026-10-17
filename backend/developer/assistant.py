@@ -88,7 +88,7 @@ class RuleDecisionModel:
         tool = pending["tool"]
         issue_id = state.get("issue_id", "")
         args = {
-            "search_api_docs": {"query": f"v1 {state['kind']} {message[:100]}", "top_k": 3},
+            "search_api_docs": {"query": f"{state.get('api_version', 'v1')} {state['kind']} {message[:100]}", "top_k": 3},
             "get_request_trace": {"request_id": issue_id},
             "inspect_key_scope": {"key_prefix": state.get("key_prefix", "")},
             "get_webhook_delivery": {"delivery_id": issue_id},
@@ -249,11 +249,13 @@ class DeveloperAssistant:
     def _register_tools(self) -> None:
         async def docs(params, _context):
             query = params["query"]
+            version_match = re.match(r'^(v[12])\b', query, re.I)
+            version = version_match.group(1).lower() if version_match else 'v1'
             if hasattr(self.knowledge, 'search_hybrid_async'):
-                results = await self.knowledge.search_hybrid_async(query, top_k=4, version='v1')
+                results = await self.knowledge.search_hybrid_async(query, top_k=4, version=version)
             else:
                 results = await self.knowledge.search_async(query, top_k=4)
-            kind_match = re.match(r"^v1\s+(auth|quota|webhook)\b", query, re.I)
+            kind_match = re.match(r"^v[12]\s+(auth|quota|webhook)\b", query, re.I)
             titles = {"auth": "鉴权", "quota": "速率限制", "webhook": "Webhook"}
             if not kind_match:
                 return results[:params.get("top_k", 3)]
@@ -339,13 +341,18 @@ class DeveloperAssistant:
             kind = (_kind(message, issue_id) if issue_id else
                     plan.get("kind") if plan.get("kind") in KIND_TO_TOOLS else _kind(message))
             proposed, chosen, adjustments = _approved_tools(kind, plan.get("tools"))
+            if issue_id.startswith('req_auth_v2_') and 'get_request_trace' in chosen and 'search_api_docs' in chosen:
+                chosen.remove('get_request_trace')
+                chosen.insert(0, 'get_request_trace')
+                adjustments.append('先核验请求记录中的 API 版本，再检索对应文档')
             if plan.get("kind") != kind:
                 adjustments.append("根据用户提供的问题标识修正故障类型")
             state = {
                 "kind": kind, "goal": str(plan.get("goal") or f"排查 {kind} 接入问题")[:160],
                 "proposed_tools": proposed, "approved_tools": chosen,
                 "plan_adjustments": adjustments,
-                "issue_id": issue_id, "key_prefix": "", "status": "running",
+                "issue_id": issue_id, "key_prefix": "", "api_version": "v1",
+                "require_version_observation": issue_id.startswith('req_auth_v2_'), "status": "running",
                 "steps": [{"id": f"s{i+1}", "title": TOOL_TITLES[tool], "tool": tool,
                            "required_evidence": TOOL_EVIDENCE[tool], "status": "pending"}
                           for i, tool in enumerate(chosen)],
@@ -361,10 +368,21 @@ class DeveloperAssistant:
                 state["timeline"].append({"type": "fallback", "text": "模型规划不可用，已采用规则计划"})
         if issue_id:
             state["issue_id"] = issue_id
+        if issue_id.startswith('req_auth_v2_'):
+            state['require_version_observation'] = True
+            if state.get('api_version', 'v1') != 'v2':
+                for step in state['steps']:
+                    if step['tool'] == 'search_api_docs' and step['status'] == 'done':
+                        step['status'] = 'pending'
+                        state['actions'] = [a for a in state['actions'] if a['tool'] != 'search_api_docs']
+                        state['evidence'] = [e for e in state['evidence'] if not e.startswith(('search_api_docs:', 'doc:'))]
+                        state['timeline'].append({'type': 'revision', 'text': '标识显示可能是 v2，移除未确认版本的文档证据并重新核验'})
         from developer.events import publish_existing
         state['timeline'] = publish_existing(state['timeline'])
         ticket_cancelled = bool(TICKET_CANCEL_RE.search(message))
-        ticket_requested_now = bool(TICKET_RE.search(message)) and not ticket_cancelled
+        # A quoted example is not an instruction to create a ticket.
+        unquoted_message = re.sub(r'“[^”]*”|「[^」]*」|"[^"]*"|\'[^\']*\'', '', message)
+        ticket_requested_now = bool(TICKET_RE.search(unquoted_message)) and not ticket_cancelled
         if ticket_requested_now and not any(step["tool"] == "create_support_ticket" for step in state["steps"]):
             state["steps"].append({"id": f"s{len(state['steps'])+1}", "title": TOOL_TITLES["create_support_ticket"],
                                    "tool": "create_support_ticket", "required_evidence": TOOL_EVIDENCE["create_support_ticket"],
@@ -436,7 +454,7 @@ class DeveloperAssistant:
             elif tool == "create_support_ticket":
                 args = {"issue_id": state["issue_id"]}
             elif tool == "search_api_docs":
-                args = {"query": f"v1 {state['kind']} {message[:120]}", "top_k": 3}
+                args = {"query": f"{state.get('api_version', 'v1')} {state['kind']} {message[:120]}", "top_k": 3}
             context = {
                 "user_id": user_id, "conversation_id": conversation_id,
                 "idempotency_key": hashlib.sha256(f"{user_id}\0{conversation_id}\0{state['issue_id']}".encode()).hexdigest(),
@@ -446,7 +464,7 @@ class DeveloperAssistant:
             result = await self.tools.call(tool, args, context=context, use_cache=(tool in {"search_api_docs", "search_quota_docs"}))
             actions_this_turn += 1
             data = result.data if result.success else None
-            source = f"{tool}:{args.get('request_id') or args.get('delivery_id') or args.get('key_prefix') or 'v1'}"
+            source = f"{tool}:{args.get('request_id') or args.get('delivery_id') or args.get('key_prefix') or state.get('api_version', 'v1')}"
             action = {"step_id": pending["id"], "tool": tool, "input": args, "success": bool(result.success and data),
                       "summary": self._observation_summary(tool, data, result.error), "source": source,
                       "result": data, "error": result.error or "", "latency_ms": round(result.latency_ms, 1)}
@@ -480,6 +498,8 @@ class DeveloperAssistant:
                         state['timeline'].append({'type': 'decision', 'text': '关联请求返回 429，追加限流文档核验'})
                 if tool == "get_request_trace" and isinstance(data, dict):
                     state["key_prefix"] = data.get("key_prefix", "")
+                    if data.get('api_version') in {'v1', 'v2'}:
+                        state['api_version'] = data['api_version']
                     if (self.dynamic_scope and state['kind'] == 'auth' and data.get('reason_code') in {'expired_key', 'missing_scope'}
                             and not any(item['tool'] == 'inspect_key_scope' for item in state['steps'])):
                         new_step = {'id': f"s{len(state['steps']) + 1}", 'title': TOOL_TITLES['inspect_key_scope'],
@@ -489,7 +509,7 @@ class DeveloperAssistant:
                         state['timeline'].append({'type': 'decision', 'text': '请求记录显示需核对密钥状态或权限，追加检查', 'step_id': new_step['id']})
                     # A verified malformed header already explains the rejection. Scope
                     # inspection is useful only when that observation does not settle it.
-                    if self.dynamic_scope and state['kind'] == 'auth' and data.get('reason_code') == 'malformed_header':
+                    if self.dynamic_scope and state['kind'] == 'auth' and data.get('reason_code') in {'malformed_header', 'missing_api_key_header'}:
                         for candidate in state['steps']:
                             if candidate['tool'] == 'inspect_key_scope' and candidate['status'] == 'pending':
                                 candidate['status'] = 'skipped'

@@ -187,28 +187,56 @@ async def developer_run(run_id: str, user_id: str = Depends(current_user)):
     return record["response"]
 
 
+@app.get('/developer/tasks/{task_id}', tags=['开发者助手'])
+async def developer_task(task_id: str, user_id: str = Depends(current_user)):
+    if _developer is None:
+        raise HTTPException(503, '开发者助手未就绪')
+    raw = await _developer.redis.get(f'developer:task:{task_id}')
+    record = json.loads(raw) if raw else None
+    if not record or record.get('user_id') != user_id:
+        raise HTTPException(404, '任务不存在或已过期')
+    return {key: value for key, value in record.items() if key != 'user_id'}
+
+
 @app.post('/developer/chat/stream', tags=['开发者助手'])
 async def developer_chat_stream(req: DeveloperChatRequest, user_id: str = Depends(current_user),
                                 idempotency_key: Optional[str] = Header(default=None, alias='Idempotency-Key', max_length=120)):
+    if _developer is None:
+        raise HTTPException(503, '开发者助手未就绪')
     async def stream():
+        import uuid
+        task_id = str(uuid.uuid4())
+        terminal = False
         queue: asyncio.Queue = asyncio.Queue()
 
+        async def record_task(status, run_id=None):
+            record = {'task_id': task_id, 'user_id': user_id, 'status': status, 'run_id': run_id}
+            await _developer.redis.setex(f'developer:task:{task_id}', 86400, json.dumps(record))
+
         async def execute():
+            nonlocal terminal
             reset_token = event_sink.set(lambda event: queue.put_nowait(('timeline', event)))
             try:
                 result = await developer_chat(req, user_id, idempotency_key)
+                await record_task('waiting' if result.get('plan', {}).get('status') == 'waiting' else 'completed', result.get('run_id'))
+                terminal = True
                 await queue.put(('complete', result))
             except HTTPException as exc:
+                await record_task('failed')
+                terminal = True
                 await queue.put(('error', {'status': exc.status_code, 'detail': exc.detail}))
             except Exception:
+                await record_task('failed')
+                terminal = True
                 await queue.put(('error', {'status': 500, 'detail': '诊断执行失败，请稍后重试'}))
             finally:
                 event_sink.reset(reset_token)
                 await queue.put(('end', {}))
 
+        await record_task('running')
         task = asyncio.create_task(execute())
         try:
-            yield 'event: started\ndata: {}\n\n'
+            yield f'event: started\ndata: {json.dumps({"task_id": task_id})}\n\n'
             while True:
                 try:
                     kind, data = await asyncio.wait_for(queue.get(), timeout=15)
@@ -222,5 +250,7 @@ async def developer_chat_stream(req: DeveloperChatRequest, user_id: str = Depend
             if not task.done():
                 task.cancel()
             await asyncio.gather(task, return_exceptions=True)
+            if not terminal:
+                await record_task('cancelled')
     return StreamingResponse(stream(), media_type='text/event-stream',
                              headers={'Cache-Control': 'no-cache', 'X-Accel-Buffering': 'no'})

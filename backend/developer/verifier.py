@@ -4,6 +4,7 @@ CAUSES = {
     'expired_key': '凭证已过期',
     'missing_scope': '缺少接口所需权限',
     'malformed_header': '认证头格式不正确',
+    'missing_api_key_header': '缺少 API Key 请求头',
     'minute_quota_exceeded': '分钟配额已用尽',
 }
 

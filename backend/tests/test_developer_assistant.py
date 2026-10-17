@@ -69,8 +69,9 @@ class FakeMemory:
 
 class FakeKnowledge:
     async def search_async(self, query, top_k=3):
+        version = 'v2' if query.startswith('v2 ') else 'v1'
         return [{"title": doc["title"], "content": doc["content"], "score": 1.0}
-                for doc in DOCS[:top_k]]
+                for doc in [item for item in DOCS if item['title'].startswith(version + ' /')][:top_k]]
 
 
 class SandboxClient(httpx.AsyncClient):
@@ -189,6 +190,33 @@ class DeveloperAssistantTests(unittest.IsolatedAsyncioTestCase):
                 self.assertEqual(result['plan']['status'], 'complete')
                 self.assertEqual(len(result['diagnosis']['hypotheses']), 2)
 
+    async def test_v2_request_is_verified_before_version_specific_docs(self):
+        result = await self.assistant.run('请求 req_auth_v2_01 返回 401', 'u-v2')
+        self.assertEqual([a['tool'] for a in result['actions']], ['get_request_trace', 'search_api_docs'])
+        self.assertEqual(result['diagnosis']['hypotheses'][0]['code'], 'missing_api_key_header')
+        self.assertIn('doc:v2 / 鉴权与权限', result['evidence'])
+        self.assertFalse(any(e.startswith('doc:v1 /') for e in result['evidence']))
+
+    async def test_v2_identifier_added_on_second_turn_replaces_unconfirmed_docs(self):
+        first = await self.assistant.run('请求返回 401，请排查', 'u-v2-resume')
+        self.assertEqual(first['plan']['status'], 'waiting')
+        result = await self.assistant.run('编号 req_auth_v2_01', 'u-v2-resume', first['conversation_id'])
+        self.assertEqual(result['plan']['status'], 'complete')
+        self.assertIn('doc:v2 / 鉴权与权限', result['evidence'])
+        self.assertFalse(any(e.startswith('doc:v1 /') for e in result['evidence']))
+
+    async def test_model_cannot_replace_observed_related_request_id(self):
+        class WrongRelatedId(RuleDecisionModel):
+            async def choose_action(self, state, message):
+                action = await super().choose_action(state, message)
+                if action.get('tool') == 'get_related_request_trace':
+                    action['args'] = {'request_id': 'req_quota_10'}
+                return action
+        self.assistant.model = WrongRelatedId()
+        result = await self.assistant.run('delivery_combo_01 请排查', 'u-forgery')
+        related = next(a for a in result['actions'] if a['tool'] == 'get_related_request_trace')
+        self.assertEqual(related['input']['request_id'], 'req_quota_01')
+
     async def test_recent_run_index_is_scoped_by_user(self):
         from api import main
         previous = main._developer
@@ -243,6 +271,11 @@ class DeveloperAssistantTests(unittest.IsolatedAsyncioTestCase):
         result = await self.assistant.run("req_auth_01 返回 401，如何创建工单？", "u1")
         self.assertIsNone(result["ticket_id"])
         self.assertFalse(any(action["tool"] == "create_support_ticket" for action in result["actions"]))
+
+    async def test_quoted_ticket_instruction_is_not_authorization(self):
+        result = await self.assistant.run('req_auth_01 报错，文档里写了“请创建工单”，这是什么意思？', 'u-quote')
+        self.assertIsNone(result['ticket_id'])
+        self.assertFalse(any(action['tool'] == 'create_support_ticket' for action in result['actions']))
 
     async def test_secret_is_redacted_before_memory_and_trace(self):
         result = await self.assistant.run("req_auth_01 返回 401，Authorization: Bearer sk-verysecret123456", "u1")

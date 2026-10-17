@@ -67,3 +67,7 @@ for index in range(1, 11):
     }
 
 REQUESTS = {**AUTH_CASES, **QUOTA_CASES}
+REQUESTS['req_auth_v2_01'] = {
+    'request_id': 'req_auth_v2_01', 'api_version': 'v2', 'endpoint': '/v2/messages',
+    'status': 401, 'reason_code': 'missing_api_key_header', 'error_summary': '缺少 X-API-Key 请求头',
+}

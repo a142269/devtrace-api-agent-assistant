@@ -47,6 +47,7 @@ export async function requestDeveloperChat(settings, message, token, requestId, 
       if (kind === 'error') throw new Error(data.detail || '诊断失败')
       if (kind === 'complete') final = data
       if (kind === 'timeline') onEvent(data)
+      if (kind === 'started') onEvent({ type: 'started', text: `任务 ${data.task_id} 已启动` })
     }
   }
   if (!final) throw new Error('连接中断，未收到完整诊断结果')

@@ -39,6 +39,8 @@ class Memory:
         return ''
     async def add_message(self, user_id, conversation_id, role, content):
         pass
+    async def update_profile(self, user_id, conversation_id):
+        pass
 
 
 class Knowledge:

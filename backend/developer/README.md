@@ -14,7 +14,9 @@
 - 模拟平台单独运行：`python -m uvicorn developer.sandbox:app --port 8100`。
 - Python 服务独立运行时，设置 `DEVELOPER_SANDBOX_URL=http://localhost:8100`，并配置 Redis、ChromaDB 与模型环境变量。
 
-模拟平台的固定记录为 `req_auth_01`～`req_auth_10`、`req_quota_01`～`req_quota_10`、`delivery_01`～`delivery_10`。HTTP 接口提供脱敏请求、密钥前缀权限和投递记录；SQLite 保存模拟工单。
+模拟平台的固定记录为 `req_auth_01`～`req_auth_10`、`req_quota_01`～`req_quota_10`、`delivery_01`～`delivery_10`，另有 `delivery_combo_01`～`delivery_combo_10` 组合案例。HTTP 接口提供脱敏请求、密钥前缀权限和投递记录；SQLite 保存模拟工单。
+
+`req_auth_v2_01` 演示先读取请求记录确认 API 版本，再检索 v2 鉴权文档；版本切换覆盖目前仅限这个模拟案例。
 
 ## API
 
@@ -24,7 +26,9 @@
 {"message":"请求 req_auth_01 返回 401，帮我排查","conversation_id":null}
 ```
 
-响应包含 `conversation_id`、`run_id`、`answer`、`plan`、`actions`、`timeline`、`evidence`、`diagnosis`、`memory_used`、可选 `ticket_id` 和 `decision_mode`。`decision_mode` 区分 `model`、`rules` 和 `rules_fallback`。等待补充时可用同一 `conversation_id` 继续。`GET /developer/runs/{run_id}` 根据认证身份授权；客户端不能指定 `user_id`。
+响应包含 `conversation_id`、`run_id`、`answer`、`plan`、`actions`、`timeline`、`evidence`、`diagnosis`、`memory_used`、`metrics`、可选 `ticket_id` 和 `decision_mode`。`decision_mode` 区分 `model`、`rules` 和 `rules_fallback`。等待补充时可用同一 `conversation_id` 继续。`GET /developer/runs` 和 `GET /developer/runs/{run_id}` 根据认证身份授权；客户端不能指定 `user_id`。
+
+流式接口的 `started` 事件提供独立的 `task_id`；`GET /developer/tasks/{task_id}` 可查询该用户的状态。断开连接时记录 `cancelled`，同会话可从最近检查点继续。进程异常退出时 `running` 状态不会自动修复。
 
 ## 设计边界
 
@@ -45,4 +49,14 @@ python -m developer.evaluate --base-url http://localhost:18002 --mode rules --ou
 python -m developer.evaluate --base-url http://localhost:18003 --mode model --sample-per-family 1 --output developer/eval_model.json
 ```
 
-评测检查完成状态、必需工具集合、文档与记录证据、依赖顺序、模拟数据声明和决策模式；出现未通过案例时命令返回非零退出码。`--sample-per-family 1` 表示每类一条，是演示抽样，不是模型准确率。
+评测检查完成状态、支持的诊断、文档与记录证据、重复调用、依赖顺序、模拟数据声明和决策模式；出现未通过案例时命令返回非零退出码。`--sample-per-family 1` 表示每类一条，是演示抽样，不是模型准确率。
+
+以下实验可独立重跑，参数和结果的适用范围见 [升级进度](升级进度.md)：
+
+```powershell
+python -m developer.evaluate_planning --output developer/eval_planning.json
+python -m developer.evaluate_recovery --output developer/eval_recovery.json
+python -m developer.evaluate_retrieval --output developer/eval_retrieval.json
+```
+
+检索评测需要可用的 ChromaDB 或本地向量模型。规则规划和故障注入使用进程内模拟平台，不能视作模型的泛化评估。

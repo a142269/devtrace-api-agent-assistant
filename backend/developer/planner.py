@@ -12,7 +12,7 @@ TOOL_TITLES = {
     "create_support_ticket": "创建模拟支持工单",
 }
 TOOL_EVIDENCE = {
-    "search_api_docs": "匹配故障类型的 v1 文档片段",
+    "search_api_docs": "匹配故障类型和 API 版本的文档片段",
     "get_request_trace": "request_id 对应的脱敏状态和错误摘要",
     "inspect_key_scope": "key_prefix 对应的状态与 scope 摘要",
     "get_webhook_delivery": "delivery_id 对应的状态、重试次数与错误摘要",
@@ -62,6 +62,8 @@ def _ready_steps(state: Dict[str, Any]) -> list[Dict[str, Any]]:
         if step["status"] != "pending":
             continue
         tool = step["tool"]
+        if tool == 'search_api_docs' and state.get('require_version_observation') and 'get_request_trace' not in completed:
+            continue
         dependencies = ({item['tool'] for item in state['steps'] if item['tool'] and item['tool'] != 'create_support_ticket'} if tool == "create_support_ticket"
                         else TOOL_DEPENDENCIES.get(tool, set()))
         if not dependencies.issubset(completed):

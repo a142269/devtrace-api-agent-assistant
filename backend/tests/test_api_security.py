@@ -113,8 +113,13 @@ class ApiSecurityTests(unittest.IsolatedAsyncioTestCase):
     async def test_stream_disconnect_releases_session_lock(self):
         stream = await main.developer_chat_stream(main.DeveloperChatRequest(message='hello', conversation_id='c1'), 'alice', 'request-1')
         iterator = stream.body_iterator
-        self.assertIn('event: started', await anext(iterator))
+        started = await anext(iterator)
+        self.assertIn('event: started', started)
+        task_id = json.loads(started.split('data: ', 1)[1])['task_id']
         self.assertIn('event: timeline', await anext(iterator))
         self.assertTrue(self.assistant.redis.held)
         await iterator.aclose()
         self.assertFalse(self.assistant.redis.held)
+        own = await self.client.get(f'/developer/tasks/{task_id}', headers=self.headers())
+        self.assertEqual(own.json()['status'], 'cancelled')
+        self.assertEqual((await self.client.get(f'/developer/tasks/{task_id}', headers=self.headers('bob'))).status_code, 404)
