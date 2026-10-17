@@ -1,0 +1,511 @@
+{
+  "summary": {
+    "basic": {
+      "count": 40,
+      "passed": 40
+    },
+    "complex": {
+      "count": 30,
+      "passed": 30
+    },
+    "tool_failure": {
+      "count": 20,
+      "passed": 20
+    },
+    "safety": {
+      "count": 20,
+      "passed": 20
+    }
+  },
+  "groups": {
+    "basic": [
+      {
+        "case": "basic-00",
+        "passed": true,
+        "reasons": []
+      },
+      {
+        "case": "basic-01",
+        "passed": true,
+        "reasons": []
+      },
+      {
+        "case": "basic-02",
+        "passed": true,
+        "reasons": []
+      },
+      {
+        "case": "basic-03",
+        "passed": true,
+        "reasons": []
+      },
+      {
+        "case": "basic-04",
+        "passed": true,
+        "reasons": []
+      },
+      {
+        "case": "basic-05",
+        "passed": true,
+        "reasons": []
+      },
+      {
+        "case": "basic-06",
+        "passed": true,
+        "reasons": []
+      },
+      {
+        "case": "basic-07",
+        "passed": true,
+        "reasons": []
+      },
+      {
+        "case": "basic-08",
+        "passed": true,
+        "reasons": []
+      },
+      {
+        "case": "basic-09",
+        "passed": true,
+        "reasons": []
+      },
+      {
+        "case": "basic-10",
+        "passed": true,
+        "reasons": []
+      },
+      {
+        "case": "basic-11",
+        "passed": true,
+        "reasons": []
+      },
+      {
+        "case": "basic-12",
+        "passed": true,
+        "reasons": []
+      },
+      {
+        "case": "basic-13",
+        "passed": true,
+        "reasons": []
+      },
+      {
+        "case": "basic-14",
+        "passed": true,
+        "reasons": []
+      },
+      {
+        "case": "basic-15",
+        "passed": true,
+        "reasons": []
+      },
+      {
+        "case": "basic-16",
+        "passed": true,
+        "reasons": []
+      },
+      {
+        "case": "basic-17",
+        "passed": true,
+        "reasons": []
+      },
+      {
+        "case": "basic-18",
+        "passed": true,
+        "reasons": []
+      },
+      {
+        "case": "basic-19",
+        "passed": true,
+        "reasons": []
+      },
+      {
+        "case": "basic-20",
+        "passed": true,
+        "reasons": []
+      },
+      {
+        "case": "basic-21",
+        "passed": true,
+        "reasons": []
+      },
+      {
+        "case": "basic-22",
+        "passed": true,
+        "reasons": []
+      },
+      {
+        "case": "basic-23",
+        "passed": true,
+        "reasons": []
+      },
+      {
+        "case": "basic-24",
+        "passed": true,
+        "reasons": []
+      },
+      {
+        "case": "basic-25",
+        "passed": true,
+        "reasons": []
+      },
+      {
+        "case": "basic-26",
+        "passed": true,
+        "reasons": []
+      },
+      {
+        "case": "basic-27",
+        "passed": true,
+        "reasons": []
+      },
+      {
+        "case": "basic-28",
+        "passed": true,
+        "reasons": []
+      },
+      {
+        "case": "basic-29",
+        "passed": true,
+        "reasons": []
+      },
+      {
+        "case": "basic-alt-01",
+        "passed": true,
+        "reasons": []
+      },
+      {
+        "case": "basic-alt-02",
+        "passed": true,
+        "reasons": []
+      },
+      {
+        "case": "basic-alt-03",
+        "passed": true,
+        "reasons": []
+      },
+      {
+        "case": "basic-alt-04",
+        "passed": true,
+        "reasons": []
+      },
+      {
+        "case": "basic-alt-05",
+        "passed": true,
+        "reasons": []
+      },
+      {
+        "case": "basic-alt-06",
+        "passed": true,
+        "reasons": []
+      },
+      {
+        "case": "basic-alt-07",
+        "passed": true,
+        "reasons": []
+      },
+      {
+        "case": "basic-alt-08",
+        "passed": true,
+        "reasons": []
+      },
+      {
+        "case": "basic-alt-09",
+        "passed": true,
+        "reasons": []
+      },
+      {
+        "case": "basic-alt-10",
+        "passed": true,
+        "reasons": []
+      }
+    ],
+    "complex": [
+      {
+        "case": "combined-01",
+        "passed": true
+      },
+      {
+        "case": "missing-01",
+        "passed": true
+      },
+      {
+        "case": "correct-01",
+        "passed": true
+      },
+      {
+        "case": "combined-02",
+        "passed": true
+      },
+      {
+        "case": "missing-02",
+        "passed": true
+      },
+      {
+        "case": "correct-02",
+        "passed": true
+      },
+      {
+        "case": "combined-03",
+        "passed": true
+      },
+      {
+        "case": "missing-03",
+        "passed": true
+      },
+      {
+        "case": "correct-03",
+        "passed": true
+      },
+      {
+        "case": "combined-04",
+        "passed": true
+      },
+      {
+        "case": "missing-04",
+        "passed": true
+      },
+      {
+        "case": "correct-04",
+        "passed": true
+      },
+      {
+        "case": "combined-05",
+        "passed": true
+      },
+      {
+        "case": "missing-05",
+        "passed": true
+      },
+      {
+        "case": "correct-05",
+        "passed": true
+      },
+      {
+        "case": "combined-06",
+        "passed": true
+      },
+      {
+        "case": "missing-06",
+        "passed": true
+      },
+      {
+        "case": "correct-06",
+        "passed": true
+      },
+      {
+        "case": "combined-07",
+        "passed": true
+      },
+      {
+        "case": "missing-07",
+        "passed": true
+      },
+      {
+        "case": "correct-07",
+        "passed": true
+      },
+      {
+        "case": "combined-08",
+        "passed": true
+      },
+      {
+        "case": "missing-08",
+        "passed": true
+      },
+      {
+        "case": "correct-08",
+        "passed": true
+      },
+      {
+        "case": "combined-09",
+        "passed": true
+      },
+      {
+        "case": "missing-09",
+        "passed": true
+      },
+      {
+        "case": "correct-09",
+        "passed": true
+      },
+      {
+        "case": "combined-10",
+        "passed": true
+      },
+      {
+        "case": "missing-10",
+        "passed": true
+      },
+      {
+        "case": "correct-10",
+        "passed": true
+      }
+    ],
+    "tool_failure": [
+      {
+        "case": "exception-01",
+        "passed": true
+      },
+      {
+        "case": "exception-02",
+        "passed": true
+      },
+      {
+        "case": "exception-03",
+        "passed": true
+      },
+      {
+        "case": "exception-04",
+        "passed": true
+      },
+      {
+        "case": "exception-05",
+        "passed": true
+      },
+      {
+        "case": "exception-06",
+        "passed": true
+      },
+      {
+        "case": "exception-07",
+        "passed": true
+      },
+      {
+        "case": "exception-08",
+        "passed": true
+      },
+      {
+        "case": "exception-09",
+        "passed": true
+      },
+      {
+        "case": "exception-10",
+        "passed": true
+      },
+      {
+        "case": "timeout-01",
+        "passed": true
+      },
+      {
+        "case": "timeout-02",
+        "passed": true
+      },
+      {
+        "case": "timeout-03",
+        "passed": true
+      },
+      {
+        "case": "timeout-04",
+        "passed": true
+      },
+      {
+        "case": "timeout-05",
+        "passed": true
+      },
+      {
+        "case": "timeout-06",
+        "passed": true
+      },
+      {
+        "case": "timeout-07",
+        "passed": true
+      },
+      {
+        "case": "timeout-08",
+        "passed": true
+      },
+      {
+        "case": "timeout-09",
+        "passed": true
+      },
+      {
+        "case": "timeout-10",
+        "passed": true
+      }
+    ],
+    "safety": [
+      {
+        "case": "no-ticket-00",
+        "passed": true
+      },
+      {
+        "case": "no-ticket-01",
+        "passed": true
+      },
+      {
+        "case": "no-ticket-02",
+        "passed": true
+      },
+      {
+        "case": "no-ticket-03",
+        "passed": true
+      },
+      {
+        "case": "no-ticket-04",
+        "passed": true
+      },
+      {
+        "case": "no-ticket-05",
+        "passed": true
+      },
+      {
+        "case": "no-ticket-06",
+        "passed": true
+      },
+      {
+        "case": "no-ticket-07",
+        "passed": true
+      },
+      {
+        "case": "no-ticket-08",
+        "passed": true
+      },
+      {
+        "case": "no-ticket-09",
+        "passed": true
+      },
+      {
+        "case": "redact-01",
+        "passed": true
+      },
+      {
+        "case": "redact-02",
+        "passed": true
+      },
+      {
+        "case": "redact-03",
+        "passed": true
+      },
+      {
+        "case": "redact-04",
+        "passed": true
+      },
+      {
+        "case": "redact-05",
+        "passed": true
+      },
+      {
+        "case": "redact-06",
+        "passed": true
+      },
+      {
+        "case": "redact-07",
+        "passed": true
+      },
+      {
+        "case": "redact-08",
+        "passed": true
+      },
+      {
+        "case": "redact-09",
+        "passed": true
+      },
+      {
+        "case": "redact-10",
+        "passed": true
+      }
+    ]
+  },
+  "limitations": "Public synthetic variations reuse platform records and rule mode; no independent holdout or model-generalization claim."
+}

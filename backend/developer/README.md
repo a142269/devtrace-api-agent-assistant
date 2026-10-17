@@ -57,6 +57,7 @@ python -m developer.evaluate --base-url http://localhost:18003 --mode model --sa
 python -m developer.evaluate_planning --output developer/eval_planning.json
 python -m developer.evaluate_recovery --output developer/eval_recovery.json
 python -m developer.evaluate_retrieval --output developer/eval_retrieval.json
+python -m developer.evaluate_scenarios --output developer/eval_scenarios.json
 ```
 
 检索评测需要可用的 ChromaDB 或本地向量模型。规则规划和故障注入使用进程内模拟平台，不能视作模型的泛化评估。
