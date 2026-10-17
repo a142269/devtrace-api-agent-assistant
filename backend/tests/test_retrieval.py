@@ -1,6 +1,7 @@
 import unittest
 import chromadb
 from developer.retrieval import fuse, lexical_rank, rerank_exact
+from developer.evaluate_retrieval import evaluate
 from mcp.knowledge_base import KnowledgeBase
 
 
@@ -52,3 +53,7 @@ class RetrievalTests(unittest.TestCase):
         kb._collection = collection
         self.assertEqual([item['title'] for item in kb.search_hybrid('auth', version='v1')], ['v1 / auth'])
         self.assertEqual([item['title'] for item in kb.search_hybrid('auth', version='v2')], ['v2 / auth'])
+        report = evaluate(kb, [{'query': 'auth', 'version': 'v1', 'expected_title': 'v1 / auth'},
+                               {'query': 'auth', 'version': 'v2', 'expected_title': 'v2 / auth'}], k=1)
+        self.assertEqual(report['metrics']['dense']['recall_at_k'], 1.0)
+        self.assertEqual(report['metrics']['reranked']['mrr'], 1.0)

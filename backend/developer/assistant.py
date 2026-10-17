@@ -236,13 +236,14 @@ class DeveloperAssistant:
     MAX_ACTIONS = 5
 
     def __init__(self, *, memory: Any, knowledge: Any, redis_client: Any, model: Any,
-                 tool_manager: MCPToolManager, sandbox_url: str):
+                 tool_manager: MCPToolManager, sandbox_url: str, dynamic_scope: bool = True):
         self.memory = memory
         self.knowledge = knowledge
         self.redis = redis_client
         self.model = model
         self.tools = tool_manager
         self.sandbox_url = sandbox_url.rstrip("/")
+        self.dynamic_scope = dynamic_scope
         self._register_tools()
 
     def _register_tools(self) -> None:
@@ -479,7 +480,7 @@ class DeveloperAssistant:
                         state['timeline'].append({'type': 'decision', 'text': '关联请求返回 429，追加限流文档核验'})
                 if tool == "get_request_trace" and isinstance(data, dict):
                     state["key_prefix"] = data.get("key_prefix", "")
-                    if (state['kind'] == 'auth' and data.get('reason_code') in {'expired_key', 'missing_scope'}
+                    if (self.dynamic_scope and state['kind'] == 'auth' and data.get('reason_code') in {'expired_key', 'missing_scope'}
                             and not any(item['tool'] == 'inspect_key_scope' for item in state['steps'])):
                         new_step = {'id': f"s{len(state['steps']) + 1}", 'title': TOOL_TITLES['inspect_key_scope'],
                                     'tool': 'inspect_key_scope', 'required_evidence': TOOL_EVIDENCE['inspect_key_scope'], 'status': 'pending'}
@@ -488,7 +489,7 @@ class DeveloperAssistant:
                         state['timeline'].append({'type': 'decision', 'text': '请求记录显示需核对密钥状态或权限，追加检查', 'step_id': new_step['id']})
                     # A verified malformed header already explains the rejection. Scope
                     # inspection is useful only when that observation does not settle it.
-                    if state['kind'] == 'auth' and data.get('reason_code') == 'malformed_header':
+                    if self.dynamic_scope and state['kind'] == 'auth' and data.get('reason_code') == 'malformed_header':
                         for candidate in state['steps']:
                             if candidate['tool'] == 'inspect_key_scope' and candidate['status'] == 'pending':
                                 candidate['status'] = 'skipped'

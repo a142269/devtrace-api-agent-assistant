@@ -56,11 +56,14 @@ for index in range(1, 11):
     }
     EVAL_CASES.append({"family": "webhook", "message": f"Webhook 投递 {delivery_id} 失败，请排查", "identifier": delivery_id, "expected_tools": ["search_api_docs", "get_webhook_delivery"]})
 
-WEBHOOK_CASES['delivery_combo_01'] = {
-    'delivery_id': 'delivery_combo_01', 'api_version': 'v1',
-    'event_type': 'message.created', 'status': 503, 'retry_count': 3,
-    'error_summary': '接收端暂不可用；关联请求记录另有 429',
-    'related_request_id': 'req_quota_01',
-}
+for index in range(1, 11):
+    delivery_id = f'delivery_combo_{index:02d}'
+    status = (503, 401, 400)[(index - 1) % 3]
+    WEBHOOK_CASES[delivery_id] = {
+        'delivery_id': delivery_id, 'api_version': 'v1',
+        'event_type': 'message.created', 'status': status, 'retry_count': index % 4,
+        'error_summary': {503: '接收端暂不可用', 401: '接收端拒绝签名', 400: '接收端拒绝请求体'}[status],
+        'related_request_id': f'req_quota_{index:02d}',
+    }
 
 REQUESTS = {**AUTH_CASES, **QUOTA_CASES}

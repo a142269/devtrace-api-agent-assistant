@@ -1,0 +1,395 @@
+{
+  "count": 12,
+  "k": 5,
+  "metrics": {
+    "dense": {
+      "recall_at_k": 1.0,
+      "mrr": 0.7986111111111112
+    },
+    "hybrid": {
+      "recall_at_k": 1.0,
+      "mrr": 0.9583333333333334
+    },
+    "reranked": {
+      "recall_at_k": 1.0,
+      "mrr": 1.0
+    }
+  },
+  "cases": [
+    {
+      "query": "Authorization Bearer 401",
+      "version": "v1",
+      "expected_title": "v1 / 鉴权与权限"
+    },
+    {
+      "query": "API key scope 403",
+      "version": "v1",
+      "expected_title": "v1 / 鉴权与权限"
+    },
+    {
+      "query": "密钥过期怎么排查",
+      "version": "v1",
+      "expected_title": "v1 / 鉴权与权限"
+    },
+    {
+      "query": "429 Retry-After",
+      "version": "v1",
+      "expected_title": "v1 / 速率限制"
+    },
+    {
+      "query": "分钟配额用完",
+      "version": "v1",
+      "expected_title": "v1 / 速率限制"
+    },
+    {
+      "query": "指数退避与限流",
+      "version": "v1",
+      "expected_title": "v1 / 速率限制"
+    },
+    {
+      "query": "Webhook delivery_id",
+      "version": "v1",
+      "expected_title": "v1 / Webhook 投递"
+    },
+    {
+      "query": "回调 5xx 重试次数",
+      "version": "v1",
+      "expected_title": "v1 / Webhook 投递"
+    },
+    {
+      "query": "用户确认后创建支持工单",
+      "version": "v1",
+      "expected_title": "v1 / 支持工单"
+    },
+    {
+      "query": "X-API-Key 401",
+      "version": "v2",
+      "expected_title": "v2 / 鉴权与权限"
+    },
+    {
+      "query": "v2 权限不足 403",
+      "version": "v2",
+      "expected_title": "v2 / 鉴权与权限"
+    },
+    {
+      "query": "v2 retry_after_seconds 429",
+      "version": "v2",
+      "expected_title": "v2 / 速率限制"
+    }
+  ],
+  "results": {
+    "dense": [
+      {
+        "rank": 1,
+        "titles": [
+          "v1 / 鉴权与权限",
+          "v1 / Webhook 投递",
+          "v1 / 支持工单",
+          "v1 / 速率限制"
+        ]
+      },
+      {
+        "rank": 1,
+        "titles": [
+          "v1 / 鉴权与权限",
+          "v1 / Webhook 投递",
+          "v1 / 支持工单",
+          "v1 / 速率限制"
+        ]
+      },
+      {
+        "rank": 4,
+        "titles": [
+          "v1 / 支持工单",
+          "v1 / 速率限制",
+          "v1 / Webhook 投递",
+          "v1 / 鉴权与权限"
+        ]
+      },
+      {
+        "rank": 1,
+        "titles": [
+          "v1 / 速率限制",
+          "v1 / Webhook 投递",
+          "v1 / 鉴权与权限",
+          "v1 / 支持工单"
+        ]
+      },
+      {
+        "rank": 3,
+        "titles": [
+          "v1 / 支持工单",
+          "v1 / Webhook 投递",
+          "v1 / 速率限制",
+          "v1 / 鉴权与权限"
+        ]
+      },
+      {
+        "rank": 2,
+        "titles": [
+          "v1 / 支持工单",
+          "v1 / 速率限制",
+          "v1 / Webhook 投递",
+          "v1 / 鉴权与权限"
+        ]
+      },
+      {
+        "rank": 1,
+        "titles": [
+          "v1 / Webhook 投递",
+          "v1 / 鉴权与权限",
+          "v1 / 支持工单",
+          "v1 / 速率限制"
+        ]
+      },
+      {
+        "rank": 1,
+        "titles": [
+          "v1 / Webhook 投递",
+          "v1 / 速率限制",
+          "v1 / 支持工单",
+          "v1 / 鉴权与权限"
+        ]
+      },
+      {
+        "rank": 1,
+        "titles": [
+          "v1 / 支持工单",
+          "v1 / Webhook 投递",
+          "v1 / 速率限制",
+          "v1 / 鉴权与权限"
+        ]
+      },
+      {
+        "rank": 1,
+        "titles": [
+          "v2 / 鉴权与权限",
+          "v2 / 速率限制"
+        ]
+      },
+      {
+        "rank": 2,
+        "titles": [
+          "v2 / 速率限制",
+          "v2 / 鉴权与权限"
+        ]
+      },
+      {
+        "rank": 1,
+        "titles": [
+          "v2 / 速率限制",
+          "v2 / 鉴权与权限"
+        ]
+      }
+    ],
+    "hybrid": [
+      {
+        "rank": 1,
+        "titles": [
+          "v1 / 鉴权与权限",
+          "v1 / Webhook 投递",
+          "v1 / 支持工单",
+          "v1 / 速率限制"
+        ]
+      },
+      {
+        "rank": 1,
+        "titles": [
+          "v1 / 鉴权与权限",
+          "v1 / Webhook 投递",
+          "v1 / 支持工单",
+          "v1 / 速率限制"
+        ]
+      },
+      {
+        "rank": 1,
+        "titles": [
+          "v1 / 鉴权与权限",
+          "v1 / Webhook 投递",
+          "v1 / 支持工单",
+          "v1 / 速率限制"
+        ]
+      },
+      {
+        "rank": 1,
+        "titles": [
+          "v1 / 速率限制",
+          "v1 / Webhook 投递",
+          "v1 / 鉴权与权限",
+          "v1 / 支持工单"
+        ]
+      },
+      {
+        "rank": 1,
+        "titles": [
+          "v1 / 速率限制",
+          "v1 / 支持工单",
+          "v1 / Webhook 投递",
+          "v1 / 鉴权与权限"
+        ]
+      },
+      {
+        "rank": 1,
+        "titles": [
+          "v1 / 速率限制",
+          "v1 / 支持工单",
+          "v1 / Webhook 投递",
+          "v1 / 鉴权与权限"
+        ]
+      },
+      {
+        "rank": 1,
+        "titles": [
+          "v1 / Webhook 投递",
+          "v1 / 鉴权与权限",
+          "v1 / 支持工单",
+          "v1 / 速率限制"
+        ]
+      },
+      {
+        "rank": 1,
+        "titles": [
+          "v1 / Webhook 投递",
+          "v1 / 速率限制",
+          "v1 / 支持工单",
+          "v1 / 鉴权与权限"
+        ]
+      },
+      {
+        "rank": 1,
+        "titles": [
+          "v1 / 支持工单",
+          "v1 / Webhook 投递",
+          "v1 / 速率限制",
+          "v1 / 鉴权与权限"
+        ]
+      },
+      {
+        "rank": 1,
+        "titles": [
+          "v2 / 鉴权与权限",
+          "v2 / 速率限制"
+        ]
+      },
+      {
+        "rank": 2,
+        "titles": [
+          "v2 / 速率限制",
+          "v2 / 鉴权与权限"
+        ]
+      },
+      {
+        "rank": 1,
+        "titles": [
+          "v2 / 速率限制",
+          "v2 / 鉴权与权限"
+        ]
+      }
+    ],
+    "reranked": [
+      {
+        "rank": 1,
+        "titles": [
+          "v1 / 鉴权与权限",
+          "v1 / Webhook 投递",
+          "v1 / 支持工单",
+          "v1 / 速率限制"
+        ]
+      },
+      {
+        "rank": 1,
+        "titles": [
+          "v1 / 鉴权与权限",
+          "v1 / Webhook 投递",
+          "v1 / 支持工单",
+          "v1 / 速率限制"
+        ]
+      },
+      {
+        "rank": 1,
+        "titles": [
+          "v1 / 鉴权与权限",
+          "v1 / Webhook 投递",
+          "v1 / 支持工单",
+          "v1 / 速率限制"
+        ]
+      },
+      {
+        "rank": 1,
+        "titles": [
+          "v1 / 速率限制",
+          "v1 / Webhook 投递",
+          "v1 / 鉴权与权限",
+          "v1 / 支持工单"
+        ]
+      },
+      {
+        "rank": 1,
+        "titles": [
+          "v1 / 速率限制",
+          "v1 / 支持工单",
+          "v1 / Webhook 投递",
+          "v1 / 鉴权与权限"
+        ]
+      },
+      {
+        "rank": 1,
+        "titles": [
+          "v1 / 速率限制",
+          "v1 / 支持工单",
+          "v1 / Webhook 投递",
+          "v1 / 鉴权与权限"
+        ]
+      },
+      {
+        "rank": 1,
+        "titles": [
+          "v1 / Webhook 投递",
+          "v1 / 鉴权与权限",
+          "v1 / 支持工单",
+          "v1 / 速率限制"
+        ]
+      },
+      {
+        "rank": 1,
+        "titles": [
+          "v1 / Webhook 投递",
+          "v1 / 速率限制",
+          "v1 / 支持工单",
+          "v1 / 鉴权与权限"
+        ]
+      },
+      {
+        "rank": 1,
+        "titles": [
+          "v1 / 支持工单",
+          "v1 / Webhook 投递",
+          "v1 / 速率限制",
+          "v1 / 鉴权与权限"
+        ]
+      },
+      {
+        "rank": 1,
+        "titles": [
+          "v2 / 鉴权与权限",
+          "v2 / 速率限制"
+        ]
+      },
+      {
+        "rank": 1,
+        "titles": [
+          "v2 / 鉴权与权限",
+          "v2 / 速率限制"
+        ]
+      },
+      {
+        "rank": 1,
+        "titles": [
+          "v2 / 速率限制",
+          "v2 / 鉴权与权限"
+        ]
+      }
+    ]
+  },
+  "limitations": "Demo corpus and labels are public and correlated; this does not measure production generalization."
+}

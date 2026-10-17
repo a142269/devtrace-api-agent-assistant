@@ -1,0 +1,149 @@
+{
+  "count": 20,
+  "failure_reported": 20,
+  "recovered": 20,
+  "p95_two_turn_ms": 3.0,
+  "cases": [
+    {
+      "case": "exception-01",
+      "fault": "exception",
+      "reported_failure": true,
+      "recovered": true,
+      "elapsed_ms": 32.4
+    },
+    {
+      "case": "exception-02",
+      "fault": "exception",
+      "reported_failure": true,
+      "recovered": true,
+      "elapsed_ms": 1.5
+    },
+    {
+      "case": "exception-03",
+      "fault": "exception",
+      "reported_failure": true,
+      "recovered": true,
+      "elapsed_ms": 1.7
+    },
+    {
+      "case": "exception-04",
+      "fault": "exception",
+      "reported_failure": true,
+      "recovered": true,
+      "elapsed_ms": 2.4
+    },
+    {
+      "case": "exception-05",
+      "fault": "exception",
+      "reported_failure": true,
+      "recovered": true,
+      "elapsed_ms": 1.2
+    },
+    {
+      "case": "exception-06",
+      "fault": "exception",
+      "reported_failure": true,
+      "recovered": true,
+      "elapsed_ms": 1.2
+    },
+    {
+      "case": "exception-07",
+      "fault": "exception",
+      "reported_failure": true,
+      "recovered": true,
+      "elapsed_ms": 1.4
+    },
+    {
+      "case": "exception-08",
+      "fault": "exception",
+      "reported_failure": true,
+      "recovered": true,
+      "elapsed_ms": 2.8
+    },
+    {
+      "case": "exception-09",
+      "fault": "exception",
+      "reported_failure": true,
+      "recovered": true,
+      "elapsed_ms": 1.2
+    },
+    {
+      "case": "exception-10",
+      "fault": "exception",
+      "reported_failure": true,
+      "recovered": true,
+      "elapsed_ms": 1.2
+    },
+    {
+      "case": "timeout-01",
+      "fault": "timeout",
+      "reported_failure": true,
+      "recovered": true,
+      "elapsed_ms": 1.3
+    },
+    {
+      "case": "timeout-02",
+      "fault": "timeout",
+      "reported_failure": true,
+      "recovered": true,
+      "elapsed_ms": 2.9
+    },
+    {
+      "case": "timeout-03",
+      "fault": "timeout",
+      "reported_failure": true,
+      "recovered": true,
+      "elapsed_ms": 1.2
+    },
+    {
+      "case": "timeout-04",
+      "fault": "timeout",
+      "reported_failure": true,
+      "recovered": true,
+      "elapsed_ms": 1.3
+    },
+    {
+      "case": "timeout-05",
+      "fault": "timeout",
+      "reported_failure": true,
+      "recovered": true,
+      "elapsed_ms": 1.4
+    },
+    {
+      "case": "timeout-06",
+      "fault": "timeout",
+      "reported_failure": true,
+      "recovered": true,
+      "elapsed_ms": 3.0
+    },
+    {
+      "case": "timeout-07",
+      "fault": "timeout",
+      "reported_failure": true,
+      "recovered": true,
+      "elapsed_ms": 1.4
+    },
+    {
+      "case": "timeout-08",
+      "fault": "timeout",
+      "reported_failure": true,
+      "recovered": true,
+      "elapsed_ms": 1.2
+    },
+    {
+      "case": "timeout-09",
+      "fault": "timeout",
+      "reported_failure": true,
+      "recovered": true,
+      "elapsed_ms": 1.1
+    },
+    {
+      "case": "timeout-10",
+      "fault": "timeout",
+      "reported_failure": true,
+      "recovered": true,
+      "elapsed_ms": 2.8
+    }
+  ],
+  "limitations": "In-process mock service and fake Redis; injected failures recover after one user retry. Latency is not production performance."
+}

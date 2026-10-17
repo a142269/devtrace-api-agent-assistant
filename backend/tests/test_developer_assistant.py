@@ -179,6 +179,16 @@ class DeveloperAssistantTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn('Retry-After 6 秒', result['answer'])
         self.assertIn('不足以证明限流导致投递失败', result['answer'])
 
+    async def test_combined_incident_variants_follow_their_own_links(self):
+        for index in range(1, 11):
+            with self.subTest(index=index):
+                result = await self.assistant.run(f'排查 delivery_combo_{index:02d}', f'combo-{index}')
+                related = next(a for a in result['actions'] if a['tool'] == 'get_related_request_trace')
+                self.assertEqual(related['input']['request_id'], f'req_quota_{index:02d}')
+                self.assertTrue(related['success'])
+                self.assertEqual(result['plan']['status'], 'complete')
+                self.assertEqual(len(result['diagnosis']['hypotheses']), 2)
+
     async def test_recent_run_index_is_scoped_by_user(self):
         from api import main
         previous = main._developer

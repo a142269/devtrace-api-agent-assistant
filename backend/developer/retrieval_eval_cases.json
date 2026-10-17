@@ -1,0 +1,14 @@
+[
+  {"query":"Authorization Bearer 401", "version":"v1", "expected_title":"v1 / 鉴权与权限"},
+  {"query":"API key scope 403", "version":"v1", "expected_title":"v1 / 鉴权与权限"},
+  {"query":"密钥过期怎么排查", "version":"v1", "expected_title":"v1 / 鉴权与权限"},
+  {"query":"429 Retry-After", "version":"v1", "expected_title":"v1 / 速率限制"},
+  {"query":"分钟配额用完", "version":"v1", "expected_title":"v1 / 速率限制"},
+  {"query":"指数退避与限流", "version":"v1", "expected_title":"v1 / 速率限制"},
+  {"query":"Webhook delivery_id", "version":"v1", "expected_title":"v1 / Webhook 投递"},
+  {"query":"回调 5xx 重试次数", "version":"v1", "expected_title":"v1 / Webhook 投递"},
+  {"query":"用户确认后创建支持工单", "version":"v1", "expected_title":"v1 / 支持工单"},
+  {"query":"X-API-Key 401", "version":"v2", "expected_title":"v2 / 鉴权与权限"},
+  {"query":"v2 权限不足 403", "version":"v2", "expected_title":"v2 / 鉴权与权限"},
+  {"query":"v2 retry_after_seconds 429", "version":"v2", "expected_title":"v2 / 速率限制"}
+]
