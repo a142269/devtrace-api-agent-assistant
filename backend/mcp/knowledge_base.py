@@ -142,7 +142,7 @@ class KnowledgeBase:
         return await asyncio.to_thread(self.search, query, top_k)
 
     def search_hybrid(self, query: str, top_k: int = 5, version: str = 'v1') -> List[Dict[str, Any]]:
-        from developer.retrieval import fuse, lexical_rank
+        from developer.retrieval import fuse, lexical_rank, rerank_exact
         # Demo corpus is small; collection.get is bounded to avoid unbounded scans.
         where = {'$and': [{'api_version': version.lower()}, {'status': 'active'}]}
         raw = self._collection.get(where=where, limit=1000, include=['documents', 'metadatas'])
@@ -156,7 +156,8 @@ class KnowledgeBase:
         dense = [{'title': meta.get('title', ''), 'content': doc, 'chunk': meta.get('chunk_index', 0)}
                  for doc, meta in zip((result.get('documents') or [[]])[0],
                                       (result.get('metadatas') or [[]])[0])]
-        return fuse(dense, lexical_rank(query, documents), top_k)
+        fused = fuse(dense, lexical_rank(query, documents), top_k=max(top_k * 3, top_k))
+        return rerank_exact(query, fused, top_k)
 
     async def search_hybrid_async(self, query: str, top_k: int = 5, version: str = 'v1') -> List[Dict[str, Any]]:
         return await asyncio.to_thread(self.search_hybrid, query, top_k, version)

@@ -1,6 +1,6 @@
 import unittest
 import chromadb
-from developer.retrieval import fuse, lexical_rank
+from developer.retrieval import fuse, lexical_rank, rerank_exact
 from mcp.knowledge_base import KnowledgeBase
 
 
@@ -13,6 +13,13 @@ class RetrievalTests(unittest.TestCase):
         fused = fuse([docs[0], docs[1]], lexical)
         self.assertEqual(fused[0]['title'], 'v1 / 限流')
         self.assertEqual(len(fused), 2)
+
+    def test_rerank_promotes_exact_technical_tokens(self):
+        candidates = [{'title': 'generic', 'content': 'API guide', 'fusion_score': .04},
+                      {'title': 'quota', 'content': '429 Retry-After', 'fusion_score': .03}]
+        result = rerank_exact('v1 429 Retry-After', candidates, 1)
+        self.assertEqual(result[0]['title'], 'quota')
+        self.assertEqual(result[0]['exact_match_score'], 1.0)
 
     def test_version_filter_applies_to_both_rankings(self):
         class Collection:

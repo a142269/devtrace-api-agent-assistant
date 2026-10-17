@@ -225,14 +225,18 @@ class MCPToolManager:
             tool.stats.consecutive_fails += 1
             tool.breaker.record_failure()
             logger.error(f"工具超时: {name} ({tool.timeout_s}s)")
-            return await self._fallback_result(tool, params, context, "执行超时")
+            result = await self._fallback_result(tool, params, context, "执行超时")
+            result.latency_ms = (time.monotonic() - t0) * 1000
+            return result
 
         except Exception as ex:
             tool.stats.failed += 1
             tool.stats.consecutive_fails += 1
             tool.breaker.record_failure()
             logger.error(f"工具异常: {name} — {ex}")
-            return await self._fallback_result(tool, params, context, str(ex))
+            result = await self._fallback_result(tool, params, context, str(ex))
+            result.latency_ms = (time.monotonic() - t0) * 1000
+            return result
 
     async def _fallback_result(
         self,

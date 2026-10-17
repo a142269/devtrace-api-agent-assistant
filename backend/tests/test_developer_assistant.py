@@ -271,6 +271,24 @@ class DeveloperAssistantTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(second['plan']['status'], 'complete')
         self.assertEqual(second['diagnosis']['hypotheses'][0]['code'], 'minute_quota_exceeded')
 
+    async def test_interrupted_tool_can_resume_from_last_checkpoint(self):
+        tool = self.assistant.tools._tools['get_request_trace']
+        original = tool.handler
+        entered = asyncio.Event()
+        async def delayed(params, context):
+            entered.set()
+            await asyncio.Event().wait()
+        tool.handler = delayed
+        task = asyncio.create_task(self.assistant.run('req_quota_01 返回 429', 'u-cancel', 'c-cancel'))
+        await asyncio.wait_for(entered.wait(), timeout=2)
+        task.cancel()
+        with self.assertRaises(asyncio.CancelledError):
+            await task
+        tool.handler = original
+        resumed = await self.assistant.run('继续', 'u-cancel', 'c-cancel')
+        self.assertEqual(resumed['plan']['status'], 'complete')
+        self.assertEqual([a['tool'] for a in resumed['actions']], ['search_api_docs', 'get_request_trace'])
+
     async def test_model_failure_is_explicitly_marked_as_fallback(self):
         class FailingModel(AnthropicDecisionModel):
             async def _ask(self, prompt):

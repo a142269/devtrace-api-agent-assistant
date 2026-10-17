@@ -45,3 +45,13 @@ def fuse(dense, lexical, top_k=4):
             items[key] = item
             scores[key] = scores.get(key, 0) + 1 / (60 + index + 1)
     return [{**items[key], 'fusion_score': scores[key]} for key in sorted(scores, key=scores.get, reverse=True)[:top_k]]
+
+
+def rerank_exact(query, candidates, top_k=4):
+    """Rerank fused candidates by exact technical token coverage, preserving RRF ties."""
+    terms = {word for word in tokens(query) if re.search(r'[a-z0-9]', word) and word not in {'v1', 'v2'}}
+    def score(item):
+        words = set(tokens(item.get('title', '') + ' ' + item.get('content', '')))
+        return len(terms & words) / len(terms) if terms else 0.0
+    return [{**item, 'exact_match_score': score(item)} for item in
+            sorted(candidates, key=lambda item: (-score(item), -item.get('fusion_score', 0)))[:top_k]]
