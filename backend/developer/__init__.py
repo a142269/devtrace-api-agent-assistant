@@ -1,1 +1,1 @@
-"""Independent developer-support scenario for EchoMind."""
+"""DevTrace developer API support agent."""

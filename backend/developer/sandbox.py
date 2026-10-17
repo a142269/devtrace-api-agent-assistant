@@ -10,7 +10,7 @@ from pydantic import BaseModel, Field
 
 from developer.data import KEYS, REQUESTS, WEBHOOK_CASES
 
-app = FastAPI(title="EchoMind developer sandbox", version="1.0")
+app = FastAPI(title="DevTrace developer sandbox", version="1.0")
 DB_PATH = Path(os.getenv("DEVELOPER_SANDBOX_DB", "data/developer_sandbox.sqlite"))
 
 

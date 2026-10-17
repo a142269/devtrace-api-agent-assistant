@@ -1,6 +1,6 @@
 # 开发者平台 API 接入助手
 
-这是 EchoMind Python 后端的独立演示场景；原客服链路和 Java 后端没有被替换。默认使用现有 Anthropic 兼容配置。没有模型服务时，可设置 `DEVELOPER_MODEL_MODE=rules`，用确定性参考模型演示工具和计划状态；此模式不代表大模型规划效果。
+这是独立的 DevTrace 开发者 API 接入诊断项目。默认使用现有 Anthropic 兼容配置。没有模型服务时，可设置 `DEVELOPER_MODEL_MODE=rules`，用确定性参考模型演示工具和计划状态；此模式不代表大模型规划效果。
 
 ## 阅读路线
 
@@ -10,7 +10,7 @@
 
 ## 运行
 
-- 全栈：在 `EchoMind` 执行 `docker compose up -d --build`。
+- 全栈：在 `backend` 执行 `docker compose up -d --build`。
 - 模拟平台单独运行：`python -m uvicorn developer.sandbox:app --port 8100`。
 - Python 服务独立运行时，设置 `DEVELOPER_SANDBOX_URL=http://localhost:8100`，并配置 Redis、ChromaDB 与模型环境变量。
 
@@ -36,7 +36,7 @@
 
 ## 验证
 
-`python -m unittest discover -s tests -p test_developer_assistant.py` 覆盖 30 条固定案例、跨轮恢复、错误标识后调整、工单去重、用户隔离与敏感信息脱敏。现有客服回归测试运行 `python -m pytest -q tests`。实测结果见 [evaluation_report.md](evaluation_report.md)；模型在线演示需要有效的模型 API Key。
+`python -m unittest discover -s tests -p test_developer_assistant.py` 覆盖 30 条固定案例、跨轮恢复、错误标识后调整、工单去重、用户隔离与敏感信息脱敏。实测结果见 [evaluation_report.md](evaluation_report.md)；模型在线演示需要有效的模型 API Key。
 
 连接已启动的两个服务后，可以运行同一套 HTTP 判定器：
 
