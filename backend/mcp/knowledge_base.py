@@ -67,11 +67,12 @@ class KnowledgeBase:
         )
 
         # 如果知识库为空，导入默认文档
-        if self._collection.count() == 0:
+        if default_documents:
+            # Upsert also migrates metadata for built-in documents after upgrades.
+            self.add_documents(default_documents)
+        elif self._collection.count() == 0:
             if default_documents is None:
                 self._load_default_docs()
-            elif default_documents:
-                self.add_documents(default_documents)
 
     # ── 文档管理 ──────────────────────────────────────────────────────────────
 
@@ -93,7 +94,9 @@ class KnowledgeBase:
                 doc_id = hashlib.md5(f"{title}_{i}_{chunk[:50]}".encode()).hexdigest()
                 ids.append(doc_id)
                 docs.append(chunk)
-                metas.append({"title": title, "chunk_index": i, "total_chunks": len(chunks)})
+                version = doc.get('api_version') or (title.split(' /', 1)[0].lower() if ' /' in title else '')
+                metas.append({"title": title, "chunk_index": i, "total_chunks": len(chunks),
+                              'api_version': version, 'status': doc.get('status', 'active')})
 
         if ids:
             # ID 由文档内容稳定生成；upsert 使重复导入幂等，同时允许同 ID 内容更新。
@@ -141,13 +144,18 @@ class KnowledgeBase:
     def search_hybrid(self, query: str, top_k: int = 5, version: str = 'v1') -> List[Dict[str, Any]]:
         from developer.retrieval import fuse, lexical_rank
         # Demo corpus is small; collection.get is bounded to avoid unbounded scans.
-        raw = self._collection.get(limit=1000, include=['documents', 'metadatas'])
+        where = {'$and': [{'api_version': version.lower()}, {'status': 'active'}]}
+        raw = self._collection.get(where=where, limit=1000, include=['documents', 'metadatas'])
         documents = [{'title': meta.get('title', ''), 'content': doc,
                       'chunk': meta.get('chunk_index', 0)}
-                     for doc, meta in zip(raw.get('documents') or [], raw.get('metadatas') or [])
-                     if str(meta.get('title', '')).lower().startswith(version.lower() + ' /')]
-        dense = [item for item in self.search(query, top_k=min(max(top_k * 3, 4), 100))
-                 if item.get('title', '').lower().startswith(version.lower() + ' /')]
+                     for doc, meta in zip(raw.get('documents') or [], raw.get('metadatas') or [])]
+        if not documents:
+            return []
+        result = self._collection.query(query_texts=[query], where=where,
+                                        n_results=min(max(top_k * 3, 4), len(documents)))
+        dense = [{'title': meta.get('title', ''), 'content': doc, 'chunk': meta.get('chunk_index', 0)}
+                 for doc, meta in zip((result.get('documents') or [[]])[0],
+                                      (result.get('metadatas') or [[]])[0])]
         return fuse(dense, lexical_rank(query, documents), top_k)
 
     async def search_hybrid_async(self, query: str, top_k: int = 5, version: str = 'v1') -> List[Dict[str, Any]]:

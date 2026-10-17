@@ -18,6 +18,12 @@ export function login(settings, username, password) {
     method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ username, password })
   })
 }
+export function requestRuns(settings, token) {
+  return requestJson(backendMeta('python', settings).baseUrl, '/developer/runs', { headers: { Authorization: `Bearer ${token}` } })
+}
+export function requestRun(settings, token, runId) {
+  return requestJson(backendMeta('python', settings).baseUrl, `/developer/runs/${encodeURIComponent(runId)}`, { headers: { Authorization: `Bearer ${token}` } })
+}
 export async function requestDeveloperChat(settings, message, token, requestId, onEvent, signal) {
   const response = await fetch(`${backendMeta('python', settings).baseUrl}/developer/chat/stream`, {
     method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}`, 'Idempotency-Key': requestId },

@@ -3,11 +3,13 @@
 from __future__ import annotations
 
 import asyncio
+import contextvars
 import hashlib
 import json
 import logging
 import os
 import re
+import time
 import uuid
 from typing import Any, Dict, Optional
 
@@ -18,12 +20,15 @@ from mcp.tool_manager import MCPToolManager, Tool
 from memory.conversation_memory import MsgRole
 
 logger = logging.getLogger(__name__)
+model_metrics = contextvars.ContextVar('developer_model_metrics', default=None)
 
 TOOL_TITLES = {
     "search_api_docs": "检索对应版本的 API 文档",
     "get_request_trace": "核对脱敏请求记录",
     "inspect_key_scope": "核对密钥状态与权限摘要",
     "get_webhook_delivery": "核对 Webhook 投递记录",
+    "get_related_request_trace": "核对投递记录关联的请求",
+    "search_quota_docs": "检索限流处理文档",
     "create_support_ticket": "创建模拟支持工单",
 }
 TOOL_EVIDENCE = {
@@ -31,6 +36,8 @@ TOOL_EVIDENCE = {
     "get_request_trace": "request_id 对应的脱敏状态和错误摘要",
     "inspect_key_scope": "key_prefix 对应的状态与 scope 摘要",
     "get_webhook_delivery": "delivery_id 对应的状态、重试次数与错误摘要",
+    "get_related_request_trace": "投递记录关联 request_id 的脱敏状态和错误摘要",
+    "search_quota_docs": "对应版本的限流文档片段",
     "create_support_ticket": "本地模拟工单编号",
 }
 KIND_TO_TOOLS = {
@@ -38,7 +45,9 @@ KIND_TO_TOOLS = {
     "quota": ["search_api_docs", "get_request_trace"],
     "webhook": ["search_api_docs", "get_webhook_delivery"],
 }
-TOOL_DEPENDENCIES = {"inspect_key_scope": {"get_request_trace"}}
+TOOL_DEPENDENCIES = {"inspect_key_scope": {"get_request_trace"},
+                     "get_related_request_trace": {"get_webhook_delivery"},
+                     "search_quota_docs": {"get_related_request_trace"}}
 
 
 def _approved_tools(kind: str, proposed: Any) -> tuple[list[str], list[str], list[str]]:
@@ -154,6 +163,8 @@ class RuleDecisionModel:
             "get_request_trace": {"request_id": issue_id},
             "inspect_key_scope": {"key_prefix": state.get("key_prefix", "")},
             "get_webhook_delivery": {"delivery_id": issue_id},
+            "get_related_request_trace": {"request_id": state.get("related_request_id", "")},
+            "search_quota_docs": {"query": "v1 quota 429", "top_k": 3},
             "create_support_ticket": {"issue_id": issue_id},
         }[tool]
         return {"action": "tool", "step_id": pending["id"], "tool": tool, "args": args}
@@ -168,11 +179,11 @@ class RuleDecisionModel:
         lines = []
         for item in observations:
             data = item.get("result")
-            if item["tool"] == "search_api_docs" and isinstance(data, list):
+            if item["tool"] in {"search_api_docs", "search_quota_docs"} and isinstance(data, list):
                 titles = [str(doc.get("title")) for doc in data if isinstance(doc, dict) and doc.get("title")]
                 if titles:
                     lines.append("已核对模拟平台文档：" + "、".join(titles) + "。")
-            elif item["tool"] == "get_request_trace" and isinstance(data, dict):
+            elif item["tool"] in {"get_request_trace", "get_related_request_trace"} and isinstance(data, dict):
                 lines.append(f"请求 {data.get('request_id')} 返回 {data.get('status')}：{data.get('error_summary')}。")
                 if data.get("retry_after_seconds") is not None:
                     lines.append(f"请等待 Retry-After {data['retry_after_seconds']} 秒后再重试。")
@@ -182,6 +193,13 @@ class RuleDecisionModel:
                 lines.append(f"投递 {data.get('delivery_id')} 返回 {data.get('status')}：{data.get('error_summary')}。")
             elif item["tool"] == "create_support_ticket" and isinstance(data, dict):
                 lines.append(f"已创建模拟工单 {data.get('ticket_id')}。")
+        delivery = next((a['result'] for a in observations if a['tool'] == 'get_webhook_delivery'
+                         and isinstance(a.get('result'), dict)), None)
+        related = next((a['result'] for a in observations if a['tool'] == 'get_related_request_trace'
+                        and isinstance(a.get('result'), dict)), None)
+        if delivery and related and delivery.get('status') == 503 and related.get('status') == 429:
+            lines.append('建议先检查 Webhook 接收端可用性，同时按关联请求记录的等待时间控制重试；'
+                         '这两条记录有关联，但不足以证明限流导致投递失败。')
         return "\n".join(lines) + "\n以上仅基于本地模拟平台数据；如需排查真实系统，请提供真实平台可用的脱敏记录。"
 
 
@@ -197,11 +215,29 @@ class AnthropicDecisionModel(RuleDecisionModel):
         self.skill = skill[:4000]
 
     async def _ask(self, prompt: str) -> Dict[str, Any]:
-        response = await self.client.messages.create(
-            model=self.model, max_tokens=4096, temperature=0,
-            system="你是开发者平台接入诊断 Agent。只输出 JSON，不暴露内部推理。" + self.skill,
-            messages=[{"role": "user", "content": prompt}],
-        )
+        started = time.perf_counter()
+        metrics = model_metrics.get()
+        if metrics is not None:
+            metrics['calls'] += 1
+        try:
+            response = await self.client.messages.create(
+                model=self.model, max_tokens=4096, temperature=0,
+                system="你是开发者平台接入诊断 Agent。只输出 JSON，不暴露内部推理。" + self.skill,
+                messages=[{"role": "user", "content": prompt}],
+            )
+        except Exception:
+            if metrics is not None:
+                metrics['errors'] += 1
+            raise
+        finally:
+            if metrics is not None:
+                metrics['latency_ms'] += (time.perf_counter() - started) * 1000
+        usage = getattr(response, 'usage', None)
+        if metrics is not None and usage is not None:
+            for name in ('input_tokens', 'output_tokens'):
+                value = getattr(usage, name, None)
+                if isinstance(value, int):
+                    metrics[name] = (metrics[name] or 0) + value
         try:
             return _json_text(response.content)
         except ValueError:
@@ -327,6 +363,8 @@ class DeveloperAssistant:
             ("get_request_trace", request, {"request_id": "string"}, ["request_id"], 0),
             ("inspect_key_scope", key, {"key_prefix": "string"}, ["key_prefix"], 0),
             ("get_webhook_delivery", webhook, {"delivery_id": "string"}, ["delivery_id"], 0),
+            ("get_related_request_trace", request, {"request_id": "string"}, ["request_id"], 0),
+            ("search_quota_docs", docs, {"query": "string", "top_k": "integer"}, ["query"], 300),
             ("create_support_ticket", ticket, {"issue_id": "string"}, ["issue_id"], 0),
         ]
         for name, handler, props, required, ttl in definitions:
@@ -343,6 +381,9 @@ class DeveloperAssistant:
         return f"developer:plan:{digest}"
 
     async def run(self, message: str, user_id: str, conversation_id: Optional[str] = None) -> Dict[str, Any]:
+        started = time.perf_counter()
+        metrics = {'calls': 0, 'errors': 0, 'latency_ms': 0.0, 'input_tokens': None, 'output_tokens': None}
+        model_metrics.set(metrics)
         message = _redact(message)
         user_id = user_id.strip()[:120] or "anonymous"
         conversation_id = conversation_id or str(uuid.uuid4())
@@ -449,6 +490,10 @@ class DeveloperAssistant:
             # Identifiers come from observed records or user input, never solely from the model.
             if tool == "get_request_trace":
                 args = {"request_id": state["issue_id"]}
+            elif tool == "get_related_request_trace":
+                args = {"request_id": state["related_request_id"]}
+            elif tool == "search_quota_docs":
+                args = {"query": "v1 quota 429", "top_k": 3}
             elif tool == "get_webhook_delivery":
                 args = {"delivery_id": state["issue_id"]}
             elif tool == "inspect_key_scope":
@@ -462,7 +507,8 @@ class DeveloperAssistant:
                 "idempotency_key": hashlib.sha256(f"{user_id}\0{conversation_id}\0{state['issue_id']}".encode()).hexdigest(),
                 "summary": f"{state['goal']}；已核验来源：{', '.join(state['evidence'])}"[:1000],
             }
-            result = await self.tools.call(tool, args, context=context, use_cache=(tool == "search_api_docs"))
+            state["timeline"].append({"type": "action", "text": f"开始：{TOOL_TITLES[tool]}", "step_id": pending["id"]})
+            result = await self.tools.call(tool, args, context=context, use_cache=(tool in {"search_api_docs", "search_quota_docs"}))
             actions_this_turn += 1
             data = result.data if result.success else None
             source = f"{tool}:{args.get('request_id') or args.get('delivery_id') or args.get('key_prefix') or 'v1'}"
@@ -470,17 +516,33 @@ class DeveloperAssistant:
                       "summary": self._observation_summary(tool, data, result.error), "source": source,
                       "result": data, "error": result.error or "", "latency_ms": round(result.latency_ms, 1)}
             state["actions"].append(action)
-            state["timeline"].append({"type": "action", "text": TOOL_TITLES[tool], "step_id": pending["id"]})
             state["timeline"].append({"type": "observation", "text": action["summary"], "step_id": pending["id"]})
             pending["status"] = "done" if result.success and data else "failed"
             state["timeline"].append({"type": "status", "text": f"{pending['id']} → {pending['status']}", "step_id": pending["id"]})
             if pending["status"] == "done":
                 state["evidence"].append(source)
-                if tool == "search_api_docs":
+                if tool in {"search_api_docs", "search_quota_docs"}:
                     state["evidence"].extend(
                         f"doc:{doc['title']}" for doc in data
                         if isinstance(doc, dict) and doc.get("title")
                     )
+                if tool == 'get_webhook_delivery' and isinstance(data, dict):
+                    related = data.get('related_request_id', '')
+                    if isinstance(related, str) and re.fullmatch(r'req_[A-Za-z0-9_-]+', related):
+                        state['related_request_id'] = related
+                        if not any(item['tool'] == 'get_related_request_trace' for item in state['steps']):
+                            state['steps'].append({'id': f"s{len(state['steps']) + 1}",
+                                'title': TOOL_TITLES['get_related_request_trace'], 'tool': 'get_related_request_trace',
+                                'required_evidence': TOOL_EVIDENCE['get_related_request_trace'], 'status': 'pending'})
+                            state['approved_tools'].append('get_related_request_trace')
+                            state['timeline'].append({'type': 'decision', 'text': '投递记录包含关联请求，追加核验请求记录'})
+                if tool == 'get_related_request_trace' and isinstance(data, dict) and data.get('status') == 429:
+                    if not any(item['tool'] == 'search_quota_docs' for item in state['steps']):
+                        state['steps'].append({'id': f"s{len(state['steps']) + 1}",
+                            'title': TOOL_TITLES['search_quota_docs'], 'tool': 'search_quota_docs',
+                            'required_evidence': TOOL_EVIDENCE['search_quota_docs'], 'status': 'pending'})
+                        state['approved_tools'].append('search_quota_docs')
+                        state['timeline'].append({'type': 'decision', 'text': '关联请求返回 429，追加限流文档核验'})
                 if tool == "get_request_trace" and isinstance(data, dict):
                     state["key_prefix"] = data.get("key_prefix", "")
                     if (state['kind'] == 'auth' and data.get('reason_code') in {'expired_key', 'missing_scope'}
@@ -500,6 +562,14 @@ class DeveloperAssistant:
                 if tool == "create_support_ticket" and isinstance(data, dict):
                     state["ticket_id"] = data.get("ticket_id")
             else:
+                error_text = str(result.error or '').lower()
+                missing_record = tool in {'get_request_trace', 'get_webhook_delivery'} and '404' in error_text
+                if missing_record:
+                    recovery_question = '模拟平台没有找到这条记录，请核对并提供正确的问题标识。'
+                elif tool in {'search_api_docs', 'search_quota_docs'} and result.success:
+                    recovery_question = '未找到匹配的文档证据，请检查知识库后重试。'
+                else:
+                    recovery_question = '工具暂不可用或结果不足，请稍后发送“继续”重试；当前不推断根因。'
                 if state["replans"] < 1:
                     state["replans"] += 1
                     if state.get("model_fallback") and isinstance(self.model, AnthropicDecisionModel):
@@ -508,14 +578,15 @@ class DeveloperAssistant:
                         revision = await self.model.revise_plan(state, tool)
                     if revision.get("_fallback"):
                         state["model_fallback"] = True
-                    question = str(revision.get("ask_user") or "请核对问题标识后重试。")[:240]
+                    # Only a verified 404 should suggest that a user supplied identifier is wrong.
+                    question = str(revision.get("ask_user") or recovery_question)[:240] if missing_record else recovery_question
                     state["steps"].append({
-                        "id": f"s{len(state['steps'])+1}", "title": "补充标识并恢复计划",
-                        "tool": None, "required_evidence": "用户提供可查询的问题标识", "status": "waiting",
+                        "id": f"s{len(state['steps'])+1}", "title": "补充标识并恢复计划" if missing_record else "等待工具恢复并继续计划",
+                        "tool": None, "required_evidence": "用户提供可查询的问题标识" if missing_record else "工具恢复或文档可用", "status": "waiting",
                     })
-                    state["timeline"].append({"type": "revision", "text": "计划调整：等待用户补充正确标识"})
+                    state["timeline"].append({"type": "revision", "text": "计划调整：" + recovery_question})
                 else:
-                    question = "工具仍不可用，请核对标识或稍后重试。"
+                    question = recovery_question
                 state["status"] = "waiting"
                 break
         if state["status"] == "running":
@@ -547,12 +618,20 @@ class DeveloperAssistant:
                             "summary_used": bool(memory.summary), "profile_used": bool(memory.user_profile)},
             "ticket_id": state.get("ticket_id"), "mock": True,
             "decision_mode": decision_mode,
+            "metrics": {"model": {**metrics, 'latency_ms': round(metrics['latency_ms'], 1)},
+                        "tool_calls": actions_this_turn,
+                        "tool_latency_ms": round(sum(a.get('latency_ms', 0) for a in state['actions'][-actions_this_turn:]), 1) if actions_this_turn else 0,
+                        "elapsed_ms": round((time.perf_counter() - started) * 1000, 1)},
         }
         from developer.verifier import build_diagnosis
         response['diagnosis'] = build_diagnosis(state['kind'], state['actions'])
         await self.redis.setex(state_key, 86400, json.dumps(state, ensure_ascii=False))
         await self.redis.setex(f"developer:run:{run_id}", 86400,
                                json.dumps({"user_id": user_id, "response": response}, ensure_ascii=False))
+        history_key = 'developer:run-index:' + hashlib.sha256(user_id.encode()).hexdigest()
+        await self.redis.zadd(history_key, {run_id: time.time()})
+        await self.redis.zremrangebyrank(history_key, 0, -101)
+        await self.redis.expire(history_key, 86400)
         await self.memory.add_message(user_id, conversation_id, MsgRole.USER, message)
         await self.memory.add_message(user_id, conversation_id, MsgRole.ASSISTANT, answer)
         if isinstance(self.model, AnthropicDecisionModel):
@@ -566,9 +645,9 @@ class DeveloperAssistant:
     def _observation_summary(tool: str, data: Any, error: Optional[str]) -> str:
         if error:
             return f"查询失败：{error[:180]}"
-        if tool == "search_api_docs":
+        if tool in {"search_api_docs", "search_quota_docs"}:
             return f"找到 {len(data or [])} 个模拟平台文档片段"
-        if tool == "get_request_trace":
+        if tool in {"get_request_trace", "get_related_request_trace"}:
             return f"HTTP {data.get('status')}；{data.get('error_summary')}"
         if tool == "inspect_key_scope":
             return f"状态 {data.get('status')}；scope {', '.join(data.get('scopes', []))}"

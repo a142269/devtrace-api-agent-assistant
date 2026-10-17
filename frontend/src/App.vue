@@ -43,6 +43,7 @@
                 <button @click="developerDraft = '请求 req_auth_01 返回 401，帮我排查'">401 鉴权</button>
                 <button @click="developerDraft = '请求 req_quota_01 遇到 429，如何处理'">429 限流</button>
                 <button @click="developerDraft = 'Webhook 投递 delivery_01 失败，请排查'">Webhook 投递</button>
+                <button @click="developerDraft = 'Webhook delivery_combo_01 失败，帮我排查'">关联故障</button>
               </div>
             </div>
           </div>
@@ -53,10 +54,19 @@
               <span>支持跨轮补充信息；创建工单需明确提出</span>
               <button v-if="developerBusy" type="button" @click="cancelRun">停止本次请求</button>
               <button v-else type="submit" :disabled="!developerDraft.trim()">发送</button>
+              <button v-if="retryRequest && !developerBusy" type="button" @click="retryLastRequest">重试上次请求</button>
             </div>
           </form>
         </section>
         <aside class="developer-inspector">
+          <section class="workspace-card">
+            <div class="card-heading"><div><span class="kicker">History</span><h2>最近运行</h2></div><button class="quiet-button" @click="refreshRuns">刷新</button></div>
+            <p v-if="historyError" role="alert">{{ historyError }}</p>
+            <p v-if="!runs.length" class="side-empty">运行记录保存 24 小时。</p>
+            <ol v-else class="developer-timeline">
+              <li v-for="run in runs" :key="run.run_id"><button class="quiet-button" :disabled="developerBusy" @click="openRun(run.run_id)">{{ run.goal }} · {{ run.status }}</button></li>
+            </ol>
+          </section>
           <section class="workspace-card">
             <div class="card-heading"><div><span class="kicker">Plan</span><h2>执行计划</h2></div><strong>{{ developerLast?.plan?.status || '待开始' }}</strong></div>
             <p v-if="developerLast?.plan?.goal" class="developer-goal">{{ developerLast.plan.goal }}</p>
@@ -109,6 +119,9 @@
               <div><dt>会话摘要</dt><dd>{{ developerLast.memory_used?.summary_used ? '已使用' : '未使用' }}</dd></div>
               <div><dt>用户画像</dt><dd>{{ developerLast.memory_used?.profile_used ? '已使用' : '未使用' }}</dd></div>
               <div><dt>模拟工单</dt><dd>{{ developerLast.ticket_id || '-' }}</dd></div>
+              <div><dt>本轮工具耗时</dt><dd>{{ developerLast.metrics?.tool_latency_ms ?? '-' }} ms</dd></div>
+              <div><dt>本轮模型耗时</dt><dd>{{ developerLast.metrics?.model?.latency_ms ?? '-' }} ms</dd></div>
+              <div><dt>模型 Token（入 / 出）</dt><dd>{{ developerLast.metrics?.model?.input_tokens ?? '未返回' }} / {{ developerLast.metrics?.model?.output_tokens ?? '未返回' }}</dd></div>
             </dl>
             <p v-else class="side-empty">同一会话的下一轮请求会读取记忆和未完成计划。</p>
           </section>
@@ -120,7 +133,7 @@
 </template>
 <script setup>
 import { computed, nextTick, onMounted, reactive, ref, watch } from 'vue'
-import { backendMeta, createInitialSettings, login, requestDeveloperChat, requestHealth, saveSettings } from './lib/backends'
+import { backendMeta, createInitialSettings, login, requestDeveloperChat, requestHealth, requestRuns, requestRun, saveSettings } from './lib/backends'
 const settings = reactive(createInitialSettings())
 const token = ref('')
 const username = ref('')
@@ -132,7 +145,10 @@ const developerDraft = ref('')
 const developerBusy = ref(false)
 const developerLast = ref(null)
 const developerMessageList = ref(null)
+const runs = ref([])
+const historyError = ref('')
 let currentController = null
+const retryRequest = ref(null)
 const developerHealthOk = ref(false)
 const developerDocsUrl = computed(() => `${backendMeta('python', settings).baseUrl}/docs`)
 let messageSequence = 0
@@ -140,28 +156,50 @@ watch(() => settings.developerConversationId, () => saveSettings(settings))
 onMounted(async () => { try { developerHealthOk.value = (await requestHealth('python', settings)).status === 'ok' } catch { developerHealthOk.value = false } })
 async function signIn() {
   loginBusy.value = true; loginError.value = ''
-  try { const result = await login(settings, username.value, password.value); clearDeveloperConversation(); token.value = result.access_token; password.value = '' }
+  try { const result = await login(settings, username.value, password.value); clearDeveloperConversation(); token.value = result.access_token; password.value = ''; await refreshRuns() }
   catch (error) { loginError.value = error.message }
   finally { loginBusy.value = false }
 }
-function logout() { currentController?.abort(); token.value = ''; password.value = ''; clearDeveloperConversation() }
+function logout() { currentController?.abort(); token.value = ''; password.value = ''; runs.value = []; historyError.value = ''; clearDeveloperConversation() }
+async function refreshRuns() {
+  try { runs.value = (await requestRuns(settings, token.value)).runs; historyError.value = '' }
+  catch (error) { historyError.value = error.message }
+}
+async function openRun(runId) {
+  try {
+    const result = await requestRun(settings, token.value, runId)
+    retryRequest.value = null
+    settings.developerConversationId = result.conversation_id
+    developerLast.value = result
+    developerMessages.value = [{ id: ++messageSequence, role: 'assistant', content: result.answer, runId: result.run_id }]
+    historyError.value = ''
+  } catch (error) { historyError.value = error.message }
+}
 function cancelRun() { currentController?.abort() }
-function clearDeveloperConversation() { developerMessages.value = []; developerLast.value = null; settings.developerConversationId = '' }
-async function sendDeveloperMessage() {
-  const content = developerDraft.value.trim()
+function clearDeveloperConversation() { developerMessages.value = []; developerLast.value = null; settings.developerConversationId = ''; retryRequest.value = null }
+async function retryLastRequest() { if (retryRequest.value) await sendDeveloperMessage(retryRequest.value) }
+async function sendDeveloperMessage(retry = null) {
+  // Vue passes a submit event for the regular form action.
+  const prior = retry && typeof retry.requestId === 'string' ? retry : null
+  const content = prior ? prior.content : developerDraft.value.trim()
   if (!content || developerBusy.value) return
-  developerMessages.value.push({ id: ++messageSequence, role: 'user', content })
+  if (!prior) developerMessages.value.push({ id: ++messageSequence, role: 'user', content })
+  const request = prior || { content, requestId: crypto.randomUUID(), conversationId: settings.developerConversationId }
+  retryRequest.value = null
   developerDraft.value = ''; developerBusy.value = true
   currentController = new AbortController()
   developerLast.value = { timeline: [] }
   try {
-    const response = await requestDeveloperChat(settings, content, token.value, crypto.randomUUID(),
+    const requestSettings = { ...settings, developerConversationId: request.conversationId }
+    const response = await requestDeveloperChat(requestSettings, content, token.value, request.requestId,
       event => developerLast.value?.timeline?.push(event), currentController.signal)
     developerHealthOk.value = true
     if (response.conversation_id) settings.developerConversationId = response.conversation_id
     developerLast.value = response
     developerMessages.value.push({ id: ++messageSequence, role: 'assistant', content: response.answer, runId: response.run_id })
+    await refreshRuns()
   } catch (error) {
+    retryRequest.value = request
     if (error.name !== 'AbortError') developerHealthOk.value = false
     developerMessages.value.push({ id: ++messageSequence, role: 'assistant', content: error.name === 'AbortError' ? '已停止本次请求；如需继续请重新发送。' : error.message })
   } finally {

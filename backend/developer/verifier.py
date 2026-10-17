@@ -15,7 +15,7 @@ def build_diagnosis(kind, actions):
         if not action.get('success') or not isinstance(result, dict):
             continue
         code = result.get('reason_code')
-        if code in CAUSES and action.get('tool') == 'get_request_trace':
+        if code in CAUSES and action.get('tool') in {'get_request_trace', 'get_related_request_trace'}:
             hypotheses.append({'code': code, 'description': CAUSES[code],
                                'status': 'supported', 'evidence': [action['source']]})
         elif action.get('tool') == 'get_webhook_delivery':

@@ -9,7 +9,7 @@ from unittest.mock import patch
 import httpx
 
 from developer import sandbox
-from developer.assistant import AnthropicDecisionModel, DeveloperAssistant, RuleDecisionModel, _json_text
+from developer.assistant import AnthropicDecisionModel, DeveloperAssistant, RuleDecisionModel, _json_text, model_metrics
 from developer.data import DOCS, EVAL_CASES
 from mcp.tool_manager import MCPToolManager
 from memory.conversation_memory import MemoryManager
@@ -18,12 +18,28 @@ from memory.conversation_memory import MemoryManager
 class FakeRedis:
     def __init__(self):
         self.values = {}
+        self.sorted_sets = {}
 
     async def get(self, key):
         return self.values.get(key)
 
     async def setex(self, key, ttl, value):
         self.values[key] = value
+
+    async def zadd(self, key, mapping):
+        self.sorted_sets.setdefault(key, {}).update(mapping)
+
+    async def zremrangebyrank(self, key, start, end):
+        entries = sorted(self.sorted_sets.get(key, {}).items(), key=lambda item: item[1])
+        for member, _ in entries[start:end + 1 if end != -1 else None]:
+            del self.sorted_sets[key][member]
+
+    async def expire(self, key, ttl):
+        return True
+
+    async def zrevrange(self, key, start, end):
+        return [member for member, _ in sorted(self.sorted_sets.get(key, {}).items(),
+                                               key=lambda item: item[1], reverse=True)][start:end + 1]
 
 
 class FakeContext:
@@ -71,6 +87,22 @@ class DeveloperAssistantTests(unittest.IsolatedAsyncioTestCase):
             SimpleNamespace(text='```json\n{"kind":"auth"}\n```'),
         ]
         self.assertEqual(_json_text(blocks), {"kind": "auth"})
+
+    async def test_model_usage_tracks_reported_tokens_and_errors(self):
+        class Messages:
+            async def create(self, **kwargs):
+                return SimpleNamespace(content=[SimpleNamespace(text='{"ok":true}')],
+                                       usage=SimpleNamespace(input_tokens=7, output_tokens=3))
+        model = object.__new__(AnthropicDecisionModel)
+        model.client = SimpleNamespace(messages=Messages())
+        model.model, model.skill = 'fake', ''
+        metrics = {'calls': 0, 'errors': 0, 'latency_ms': 0.0, 'input_tokens': None, 'output_tokens': None}
+        token = model_metrics.set(metrics)
+        try:
+            self.assertEqual(await model._ask('test'), {'ok': True})
+            self.assertEqual((metrics['calls'], metrics['input_tokens'], metrics['output_tokens']), (1, 7, 3))
+        finally:
+            model_metrics.reset(token)
 
     async def test_episodic_search_uses_chroma_supported_filter(self):
         memory = object.__new__(MemoryManager)
@@ -134,6 +166,33 @@ class DeveloperAssistantTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(expired['diagnosis']['hypotheses'][0]['code'], 'expired_key')
         self.assertTrue(expired['diagnosis']['hypotheses'][0]['evidence'])
 
+    async def test_combined_incident_follows_observed_link_and_cites_both_failures(self):
+        result = await self.assistant.run('Webhook delivery_combo_01 失败，请创建工单', 'u-combo')
+        self.assertEqual(result['plan']['status'], 'complete')
+        self.assertEqual([action['tool'] for action in result['actions']], [
+            'search_api_docs', 'get_webhook_delivery', 'get_related_request_trace',
+            'search_quota_docs', 'create_support_ticket'])
+        self.assertEqual(result['actions'][2]['input']['request_id'], 'req_quota_01')
+        self.assertEqual({item['code'] for item in result['diagnosis']['hypotheses']},
+                         {'webhook_delivery_failed', 'minute_quota_exceeded'})
+        self.assertTrue(result['ticket_id'].startswith('MOCK-'))
+        self.assertIn('Retry-After 6 秒', result['answer'])
+        self.assertIn('不足以证明限流导致投递失败', result['answer'])
+
+    async def test_recent_run_index_is_scoped_by_user(self):
+        from api import main
+        previous = main._developer
+        main._developer = self.assistant
+        try:
+            alice = await self.assistant.run('req_auth_01 返回 401', 'alice')
+            bob = await self.assistant.run('req_quota_01 返回 429', 'bob')
+            alice_runs = await main.developer_runs('alice')
+            bob_runs = await main.developer_runs('bob')
+            self.assertEqual([item['run_id'] for item in alice_runs['runs']], [alice['run_id']])
+            self.assertEqual([item['run_id'] for item in bob_runs['runs']], [bob['run_id']])
+        finally:
+            main._developer = previous
+
     async def test_missing_id_then_resume_and_user_isolation(self):
         first = await self.assistant.run("我的 API 返回 401，请帮我查", "u1")
         self.assertEqual(first["plan"]["status"], "waiting")
@@ -192,6 +251,25 @@ class DeveloperAssistantTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(result["actions"]), 1)
         self.assertFalse(result["actions"][0]["success"])
         self.assertEqual(result["evidence"], [])
+        self.assertIn('未找到匹配的文档证据', result['answer'])
+
+    async def test_transient_tool_failure_can_resume_without_changing_identifier(self):
+        tool = self.assistant.tools._tools['get_request_trace']
+        original = tool.handler
+        calls = 0
+        async def flaky(params, context):
+            nonlocal calls
+            calls += 1
+            if calls == 1:
+                raise RuntimeError('service unavailable')
+            return await original(params, context)
+        tool.handler = flaky
+        first = await self.assistant.run('req_quota_01 返回 429', 'u-recovery')
+        self.assertEqual(first['plan']['status'], 'waiting')
+        self.assertIn('工具暂不可用', first['answer'])
+        second = await self.assistant.run('继续', 'u-recovery', first['conversation_id'])
+        self.assertEqual(second['plan']['status'], 'complete')
+        self.assertEqual(second['diagnosis']['hypotheses'][0]['code'], 'minute_quota_exceeded')
 
     async def test_model_failure_is_explicitly_marked_as_fallback(self):
         class FailingModel(AnthropicDecisionModel):

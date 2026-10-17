@@ -5,6 +5,8 @@ DOCS = [
     {"title": "v1 / 速率限制", "content": "模拟平台 v1 的 429 表示当前租户已达到分钟配额。请求记录提供 limit、remaining 与 retry_after_seconds。客户端应等待 Retry-After 后重试，并采用指数退避；不要在限流期间持续快速重试。"},
     {"title": "v1 / Webhook 投递", "content": "模拟平台 v1 会在投递记录中保存 delivery_id、HTTP 状态、重试次数和脱敏错误摘要。401 通常需要核对签名密钥配置；400 应检查请求体与处理器；5xx 应检查接收端可用性。必须先查询 delivery_id，不能仅凭状态码断言根因。"},
     {"title": "v1 / 支持工单", "content": "模拟平台的支持工单只保存演示数据。需要人工处理时先总结已验证证据；只有用户明确要求或确认创建工单，才可调用 create_support_ticket。返回的 ticket_id 仅为本地模拟平台编号。"},
+    {"title": "v2 / 鉴权与权限", "content": "模拟平台 v2 使用 X-API-Key 请求头。401 表示凭证缺失或无效；403 表示缺少接口所需权限。请勿提供完整密钥。"},
+    {"title": "v2 / 速率限制", "content": "模拟平台 v2 的 429 返回 retry_after_seconds。请等待该时间后使用指数退避重试。"},
 ]
 
 AUTH_CASES = {}
@@ -53,5 +55,12 @@ for index in range(1, 11):
         "error_summary": {401: "接收端拒绝签名", 400: "接收端拒绝请求体", 503: "接收端暂不可用"}[status],
     }
     EVAL_CASES.append({"family": "webhook", "message": f"Webhook 投递 {delivery_id} 失败，请排查", "identifier": delivery_id, "expected_tools": ["search_api_docs", "get_webhook_delivery"]})
+
+WEBHOOK_CASES['delivery_combo_01'] = {
+    'delivery_id': 'delivery_combo_01', 'api_version': 'v1',
+    'event_type': 'message.created', 'status': 503, 'retry_count': 3,
+    'error_summary': '接收端暂不可用；关联请求记录另有 429',
+    'related_request_id': 'req_quota_01',
+}
 
 REQUESTS = {**AUTH_CASES, **QUOTA_CASES}

@@ -152,6 +152,28 @@ async def developer_chat(req: DeveloperChatRequest, user_id: str = Depends(curre
             except LockError:
                 pass
 
+@app.get('/developer/runs', tags=['开发者助手'])
+async def developer_runs(user_id: str = Depends(current_user)):
+    if _developer is None:
+        raise HTTPException(503, '开发者助手未就绪')
+    key = 'developer:run-index:' + hashlib.sha256(user_id.encode()).hexdigest()
+    run_ids = await _developer.redis.zrevrange(key, 0, 49)
+    items = []
+    for run_id in run_ids:
+        if isinstance(run_id, bytes):
+            run_id = run_id.decode('utf-8')
+        raw = await _developer.redis.get(f'developer:run:{run_id}')
+        if not raw:
+            continue
+        record = json.loads(raw)
+        if record.get('user_id') == user_id:
+            response = record['response']
+            items.append({'run_id': run_id, 'conversation_id': response['conversation_id'],
+                          'kind': response['kind'], 'status': response['plan']['status'],
+                          'goal': response['plan']['goal']})
+    return {'runs': items}
+
+
 @app.get("/developer/runs/{run_id}", tags=["开发者助手"])
 async def developer_run(run_id: str, user_id: str = Depends(current_user)):
     if _developer is None:
