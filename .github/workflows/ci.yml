@@ -35,3 +35,27 @@ jobs:
           cache-dependency-path: frontend/package-lock.json
       - run: npm ci
       - run: npm run build
+
+  dependency-audit:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: backend
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: python -m pip install pip-audit==2.9.0
+      # Findings are published, but do not block CI while upstream issues remain unresolved.
+      - id: audit
+        continue-on-error: true
+        run: pip-audit -r requirements.txt --format json --output dependency-audit.json
+      - if: steps.audit.outcome == 'failure'
+        run: echo '::warning::Dependency audit reported vulnerabilities or failed; inspect the job log and audit artifact.'
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: dependency-audit
+          path: backend/dependency-audit.json
+          if-no-files-found: warn

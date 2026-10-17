@@ -1,0 +1,181 @@
+{
+  "summary": {
+    "same_session": {
+      "count": 10,
+      "none": 0,
+      "short": 10,
+      "layered": 10,
+      "cross_user_leaks": 0
+    },
+    "new_session": {
+      "count": 10,
+      "none": 0,
+      "short": 0,
+      "layered": 10,
+      "cross_user_leaks": 0
+    }
+  },
+  "cases": [
+    {
+      "case": "same_session-01",
+      "scope": "same_session",
+      "none": false,
+      "short": true,
+      "layered": true,
+      "cross_user_leak": false
+    },
+    {
+      "case": "new_session-01",
+      "scope": "new_session",
+      "none": false,
+      "short": false,
+      "layered": true,
+      "cross_user_leak": false
+    },
+    {
+      "case": "same_session-02",
+      "scope": "same_session",
+      "none": false,
+      "short": true,
+      "layered": true,
+      "cross_user_leak": false
+    },
+    {
+      "case": "new_session-02",
+      "scope": "new_session",
+      "none": false,
+      "short": false,
+      "layered": true,
+      "cross_user_leak": false
+    },
+    {
+      "case": "same_session-03",
+      "scope": "same_session",
+      "none": false,
+      "short": true,
+      "layered": true,
+      "cross_user_leak": false
+    },
+    {
+      "case": "new_session-03",
+      "scope": "new_session",
+      "none": false,
+      "short": false,
+      "layered": true,
+      "cross_user_leak": false
+    },
+    {
+      "case": "same_session-04",
+      "scope": "same_session",
+      "none": false,
+      "short": true,
+      "layered": true,
+      "cross_user_leak": false
+    },
+    {
+      "case": "new_session-04",
+      "scope": "new_session",
+      "none": false,
+      "short": false,
+      "layered": true,
+      "cross_user_leak": false
+    },
+    {
+      "case": "same_session-05",
+      "scope": "same_session",
+      "none": false,
+      "short": true,
+      "layered": true,
+      "cross_user_leak": false
+    },
+    {
+      "case": "new_session-05",
+      "scope": "new_session",
+      "none": false,
+      "short": false,
+      "layered": true,
+      "cross_user_leak": false
+    },
+    {
+      "case": "same_session-06",
+      "scope": "same_session",
+      "none": false,
+      "short": true,
+      "layered": true,
+      "cross_user_leak": false
+    },
+    {
+      "case": "new_session-06",
+      "scope": "new_session",
+      "none": false,
+      "short": false,
+      "layered": true,
+      "cross_user_leak": false
+    },
+    {
+      "case": "same_session-07",
+      "scope": "same_session",
+      "none": false,
+      "short": true,
+      "layered": true,
+      "cross_user_leak": false
+    },
+    {
+      "case": "new_session-07",
+      "scope": "new_session",
+      "none": false,
+      "short": false,
+      "layered": true,
+      "cross_user_leak": false
+    },
+    {
+      "case": "same_session-08",
+      "scope": "same_session",
+      "none": false,
+      "short": true,
+      "layered": true,
+      "cross_user_leak": false
+    },
+    {
+      "case": "new_session-08",
+      "scope": "new_session",
+      "none": false,
+      "short": false,
+      "layered": true,
+      "cross_user_leak": false
+    },
+    {
+      "case": "same_session-09",
+      "scope": "same_session",
+      "none": false,
+      "short": true,
+      "layered": true,
+      "cross_user_leak": false
+    },
+    {
+      "case": "new_session-09",
+      "scope": "new_session",
+      "none": false,
+      "short": false,
+      "layered": true,
+      "cross_user_leak": false
+    },
+    {
+      "case": "same_session-10",
+      "scope": "same_session",
+      "none": false,
+      "short": true,
+      "layered": true,
+      "cross_user_leak": false
+    },
+    {
+      "case": "new_session-10",
+      "scope": "new_session",
+      "none": false,
+      "short": false,
+      "layered": true,
+      "cross_user_leak": false
+    }
+  ],
+  "limitations": "Synthetic context recall only. History is seeded directly; this does not measure LLM compression, profile quality or diagnostic task success."
+}

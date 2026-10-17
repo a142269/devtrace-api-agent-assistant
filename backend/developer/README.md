@@ -58,6 +58,9 @@ python -m developer.evaluate_planning --output developer/eval_planning.json
 python -m developer.evaluate_recovery --output developer/eval_recovery.json
 python -m developer.evaluate_retrieval --output developer/eval_retrieval.json
 python -m developer.evaluate_scenarios --output developer/eval_scenarios.json
+python -m developer.evaluate_memory --output developer/eval_memory.json
 ```
 
 检索评测需要可用的 ChromaDB 或本地向量模型。规则规划和故障注入使用进程内模拟平台，不能视作模型的泛化评估。
+
+记忆对照需要独立的 Redis 和 ChromaDB 数据目录，运行时会写入合成用户和测试 collection；请勿使用生产数据存储。脚本直接写入历史摘要，不能用于评估模型摘要质量。依赖扫描结果和尚未解决的漏洞也记录在[升级进度](升级进度.md)中。
