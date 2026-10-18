@@ -176,6 +176,31 @@ class ApiSecurityTests(unittest.IsolatedAsyncioTestCase):
         with self.assertRaises(Exception):
             await main.developer_task('t1', 'bob')
 
+    async def test_task_owned_by_a_live_replica_is_not_repaired(self):
+        redis = self.assistant.redis
+        record = await main._write_task_record(redis, 't8', 'alice', 'running')
+        record['worker_id'] = 'other-worker'
+        record['updated_at'] -= 3600
+        await redis.setex('developer:task:t8', 86400, json.dumps(record))
+        await redis.setex('developer:worker:other-worker', 90, 'alive')
+        view = await main.developer_task('t8', 'alice')
+        self.assertEqual(view['status'], 'running')
+        self.assertEqual(await main.reconcile_stale_tasks(redis), 0)
+
+    async def test_task_owned_by_a_dead_replica_is_repaired(self):
+        redis = self.assistant.redis
+        record = await main._write_task_record(redis, 't9', 'alice', 'running')
+        record['worker_id'] = 'dead-worker'
+        record['updated_at'] -= 3600
+        await redis.setex('developer:task:t9', 86400, json.dumps(record))
+        self.assertEqual(await main.reconcile_stale_tasks(redis), 1)
+        self.assertEqual((await main.developer_task('t9', 'alice'))['status'], 'interrupted')
+
+    async def test_worker_registration_is_visible_to_replicas(self):
+        await main.register_worker(self.assistant.redis)
+        self.assertTrue(await main._worker_alive(self.assistant.redis, main.WORKER_ID))
+        self.assertFalse(await main._worker_alive(self.assistant.redis, 'missing-worker'))
+
     async def test_live_running_task_and_finished_task_are_not_interrupted(self):
         redis = self.assistant.redis
         await main._write_task_record(redis, 't2', 'alice', 'running')

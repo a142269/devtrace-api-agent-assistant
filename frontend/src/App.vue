@@ -271,6 +271,10 @@ async function sendDeveloperMessage(retry = null) {
 }
 </script>
 <style scoped>
+button:focus-visible, input:focus-visible, textarea:focus-visible, a:focus-visible {
+  outline: 2px solid #8ab4ff;
+  outline-offset: 2px;
+}
 .diagnosis-status { color: #92a1f5; font-size: 12px; font-weight: 600; }
 .diagnosis-summary { margin: 0 0 12px; color: #9aa7bb; font-size: 12px; line-height: 1.6; }
 .hypothesis { padding-bottom: 12px; margin-bottom: 12px; border-bottom: 1px solid rgba(141, 153, 170, 0.16); }

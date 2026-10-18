@@ -4,7 +4,9 @@ import hashlib
 import json
 import logging
 import os
+import socket
 import time
+import uuid
 from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Optional
@@ -31,6 +33,13 @@ logger = logging.getLogger(__name__)
 _developer = None
 TASK_TTL_SECONDS = 86400
 TASK_INDEX_KEY = 'developer:tasks:running'
+# A unique id per API process. Tasks record their owner so that a restarted or
+# additional replica only repairs work whose worker is actually gone.
+WORKER_ID = os.getenv('DEVTRACE_WORKER_ID', '').strip() or (
+    f'{socket.gethostname()}-{os.getpid()}-{uuid.uuid4().hex[:6]}')
+WORKER_KEY_PREFIX = 'developer:worker:'
+WORKER_TTL_SECONDS = 90
+WORKER_HEARTBEAT_SECONDS = 30
 
 
 def _stale_after_seconds() -> float:
@@ -46,9 +55,44 @@ def _task_key(task_id: str) -> str:
     return f'developer:task:{task_id}'
 
 
+def _worker_key(worker_id: str) -> str:
+    return WORKER_KEY_PREFIX + worker_id
+
+
+async def register_worker(redis) -> None:
+    """Publish worker liveness with a TTL so other replicas can tell it is alive."""
+    await redis.setex(_worker_key(WORKER_ID), WORKER_TTL_SECONDS,
+                      json.dumps({'pid': os.getpid(), 'started_at': time.time()}))
+
+
+async def worker_heartbeat(redis) -> None:
+    while True:
+        try:
+            await register_worker(redis)
+        except Exception:
+            logger.warning('worker 心跳写入失败', exc_info=True)
+        await asyncio.sleep(WORKER_HEARTBEAT_SECONDS)
+
+
+async def _worker_alive(redis, worker_id: str) -> bool:
+    if not worker_id:
+        return False
+    return bool(await redis.get(_worker_key(worker_id)))
+
+
+async def _should_repair(redis, record: dict) -> bool:
+    """A running task is repairable when its owner is this worker or is gone."""
+    if record.get('status') != 'running':
+        return False
+    owner = str(record.get('worker_id') or '')
+    if not owner or owner == WORKER_ID:
+        return True
+    return not await _worker_alive(redis, owner)
+
+
 async def _write_task_record(redis, task_id: str, user_id: str, status: str, run_id=None) -> dict:
     record = {'task_id': task_id, 'user_id': user_id, 'status': status, 'run_id': run_id,
-              'updated_at': time.time()}
+              'worker_id': WORKER_ID, 'updated_at': time.time()}
     await redis.setex(_task_key(task_id), TASK_TTL_SECONDS, json.dumps(record))
     # The index lets a restarted process find the tasks an earlier process left behind.
     if status == 'running':
@@ -103,10 +147,11 @@ async def _mark_interrupted(redis, task_id: str, record: dict) -> dict:
 
 
 async def reconcile_stale_tasks(redis) -> int:
-    """Repair tasks a previous process left in `running` (called once at startup).
+    """Repair running tasks whose owning worker is gone.
 
-    Only safe for a single application process sharing this Redis. With multiple
-    replicas, startup repair must scope the index to its own worker id instead.
+    Safe with multiple replicas sharing Redis: a task owned by another live worker
+    (its heartbeat key exists) is left alone, while tasks from this worker or from
+    a worker whose TTL expired are marked interrupted.
     """
     members = getattr(redis, 'smembers', None)
     if members is None:
@@ -125,8 +170,9 @@ async def reconcile_stale_tasks(redis) -> int:
             await redis.srem(TASK_INDEX_KEY, task_id)
             continue
         if record.get('status') == 'running':
-            await _mark_interrupted(redis, task_id, record)
-            marked += 1
+            if await _should_repair(redis, record):
+                await _mark_interrupted(redis, task_id, record)
+                marked += 1
         else:
             await redis.srem(TASK_INDEX_KEY, task_id)
     return marked
@@ -165,7 +211,10 @@ async def lifespan(app: FastAPI):
         tool_manager=MCPToolManager(api_key=key, base_url=base_url, model=model_name),
         sandbox_url=os.getenv("DEVELOPER_SANDBOX_URL", "http://developer-sandbox:8100"),
     )
+    heartbeat = None
     try:
+        await register_worker(_developer.redis)
+        heartbeat = asyncio.create_task(worker_heartbeat(_developer.redis))
         interrupted = await reconcile_stale_tasks(_developer.redis)
         if interrupted:
             logger.warning('启动时把 %s 个残留 running 任务标记为 interrupted', interrupted)
@@ -174,6 +223,9 @@ async def lifespan(app: FastAPI):
     try:
         yield
     finally:
+        if heartbeat is not None:
+            heartbeat.cancel()
+            await asyncio.gather(heartbeat, return_exceptions=True)
         await memory.close()
         _developer = None
 
@@ -309,8 +361,9 @@ async def developer_task(task_id: str, user_id: str = Depends(current_user)):
     record = json.loads(raw) if raw else None
     if not record or record.get('user_id') != user_id:
         raise HTTPException(404, '任务不存在或已过期')
-    # Query-time repair: a task whose worker stopped cannot stay `running` forever.
-    if task_is_stale(record):
+    # Query-time repair: a task whose worker stopped cannot stay `running` forever,
+    # but a task owned by another live replica must not be touched.
+    if task_is_stale(record) and await _should_repair(_developer.redis, record):
         record = await _mark_interrupted(_developer.redis, task_id, record)
     return {key: value for key, value in record.items() if key != 'user_id'}
 

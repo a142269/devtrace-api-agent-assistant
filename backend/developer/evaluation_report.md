@@ -66,7 +66,7 @@ Vue 生产镜像此前使用 Node 20.20.2 构建通过。Playwright 实际打开
 
 ```text
 python -m unittest discover -s tests
-Ran 68 tests in 5.0s
+Ran 71 tests in 5.1s
 OK
 ```
 
@@ -124,10 +124,15 @@ Docker Desktop（Linux 容器）上使用当前 Dockerfile 与 `requirements.txt
 | 运行历史 / Run ID | 列表与实际 `Run ID` 均显示 |
 | 桌面浏览器错误 | console error 0，失败请求 0 |
 | 移动端 390×844 | 无横向溢出；用户名/密码/问题输入框均有可访问名称；诊断正文正常渲染；console error 0 |
+| 纯键盘登录 | Tab 到"用户名"、输入、Tab 到"密码"、输入、回车登录成功 |
+| 焦点可见 | 键盘聚焦输入框时 outline 为 2px 实线 |
+| 键盘可达组件与提交 | Tab 可达问题输入框，`Ctrl+Enter` 可提交并渲染诊断 |
+| 对比度抽查 | 标题、消息正文、目标/空态/按钮等选择器全部达到 WCAG AA，失败 0 项 |
+| 页面性能（dev server） | DOMContentLoaded 62 ms、load 90 ms、FCP 116 ms；点击发送到诊断可见 2,868 ms（含一次真实模型调用） |
 
-截图：[诊断主界面](assets/frontend-e2e-ui-2026-10-18.png)、[证据卡片](assets/frontend-e2e-evidence-2026-10-18.png)、[安全边界卡片](assets/frontend-e2e-security-2026-10-18.png)、[注入场景](assets/frontend-e2e-injection-2026-10-18.png)、[移动端](assets/frontend-e2e-mobile-2026-10-18.jpg)。机器可读结果：[eval_frontend_e2e_2026-10-18.json](eval_frontend_e2e_2026-10-18.json)。
+截图：[诊断主界面](assets/frontend-e2e-ui-2026-10-18.png)、[证据卡片](assets/frontend-e2e-evidence-2026-10-18.png)、[安全边界卡片](assets/frontend-e2e-security-2026-10-18.png)、[注入场景](assets/frontend-e2e-injection-2026-10-18.png)、[移动端](assets/frontend-e2e-mobile-2026-10-18.jpg)、[可访问性/性能检查页](assets/frontend-a11y-perf-2026-10-18.png)。机器可读结果：[eval_frontend_e2e_2026-10-18.json](eval_frontend_e2e_2026-10-18.json)、[eval_frontend_a11y_perf_2026-10-18.json](eval_frontend_a11y_perf_2026-10-18.json)。
 
-局限：覆盖桌面与移动端各一个视口，只做了基础可访问名称检查（未做 axe 扫描、键盘导航、对比度与性能）；浏览器自动化脚本在仓库外，未纳入 CI。
+局限：键盘导航、焦点可见、抽样对比度与基础性能已检查，但没有用 axe 做全量规则扫描，也没有屏幕阅读器实测；性能是 Vite dev server 单次数值，不是生产构建的基准。浏览器自动化脚本在仓库外，未纳入 CI。
 
 ## 独立 holdout 评测（2026-10-18）
 

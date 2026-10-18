@@ -1,0 +1,93 @@
+{
+  "url": "http://localhost:5174/",
+  "started_at": "2026-10-18T10:32:18.696Z",
+  "checks": {
+    "keyboard_reaches_username": true,
+    "focus_outline_visible": true,
+    "keyboard_moves_to_password": true,
+    "keyboard_login": true,
+    "keyboard_reaches_composer": true,
+    "keyboard_submit": true,
+    "contrast_primary_text": true
+  },
+  "keyboard": [
+    {
+      "tag": "A",
+      "label": "DevTrace 首页",
+      "placeholder": null
+    },
+    {
+      "tag": "A",
+      "label": null,
+      "placeholder": null
+    },
+    {
+      "tag": "INPUT",
+      "label": "用户名",
+      "placeholder": "用户名"
+    }
+  ],
+  "console_errors": [],
+  "interaction_to_diagnosis_ms": 2868,
+  "contrast": [
+    {
+      "selector": "h1",
+      "text": "API 接入诊断助手",
+      "ratio": 18.09,
+      "required": 3,
+      "large": true
+    },
+    {
+      "selector": "h2",
+      "text": "最近运行",
+      "ratio": 18.09,
+      "required": 4.5,
+      "large": false
+    },
+    {
+      "selector": ".developer-message p",
+      "text": "请求 req_auth_01 返回 401，帮我排查",
+      "ratio": 5.73,
+      "required": 4.5,
+      "large": false
+    },
+    {
+      "selector": ".side-empty",
+      "text": "发送问题后，计划会显示在这里。",
+      "ratio": 4.95,
+      "required": 4.5,
+      "large": false
+    },
+    {
+      "selector": ".kicker",
+      "text": "DEVELOPER SUPPORT LAB",
+      "ratio": 5.31,
+      "required": 4.5,
+      "large": false
+    },
+    {
+      "selector": ".topbar-tools",
+      "text": "模拟平台 · 已连接\nAPI 文档\n退出登录",
+      "ratio": 4.95,
+      "required": 4.5,
+      "large": false
+    },
+    {
+      "selector": ".composer-bottom span",
+      "text": "支持跨轮补充信息；创建工单需明确提出",
+      "ratio": 4.95,
+      "required": 4.5,
+      "large": false
+    }
+  ],
+  "contrast_failures": [],
+  "performance": {
+    "dom_content_loaded_ms": 62,
+    "load_event_ms": 90,
+    "first_paint_ms": 116,
+    "first_contentful_paint_ms": 116,
+    "transfer_size_bytes": 745
+  },
+  "finished_at": "2026-10-18T10:32:23.483Z",
+  "passed": true
+}

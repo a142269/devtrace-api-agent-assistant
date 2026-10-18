@@ -43,7 +43,7 @@
 
 ## 验证
 
-`python -m unittest discover -s tests` 覆盖 68 项测试：30 条固定案例、跨轮恢复、错误标识后调整、工单去重、用户隔离与敏感信息脱敏，以及证据冲突、关联请求排除、工具记录/用户消息中的提示注入和任务心跳修复。实测结果见 [evaluation_report.md](evaluation_report.md)；模型在线演示需要有效的模型 API Key。
+`python -m unittest discover -s tests` 覆盖 71 项测试：30 条固定案例、跨轮恢复、错误标识后调整、工单去重、用户隔离与敏感信息脱敏，以及证据冲突、关联请求排除、工具记录/用户消息中的提示注入和任务心跳修复。实测结果见 [evaluation_report.md](evaluation_report.md)；模型在线演示需要有效的模型 API Key。
 
 登录取得短期 token 后，写入当前进程环境变量 `DEVTRACE_EVAL_TOKEN`，再运行 HTTP 判定器；不要把 token 写入仓库或命令历史：
 
