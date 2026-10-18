@@ -66,7 +66,7 @@ Vue 生产镜像此前使用 Node 20.20.2 构建通过。Playwright 实际打开
 
 ```text
 python -m unittest discover -s tests
-Ran 79 tests in 5.5s
+Ran 86 tests in 5.6s
 OK
 ```
 
@@ -190,6 +190,23 @@ Agent 新增 `search_public_docs` 工具与 `public_api` 计划路径；模型�
 - 报告：[eval_error_playbooks_2026-10-18.json](eval_error_playbooks_2026-10-18.json)；Docker 真实模型 HTTP 验证 "Stripe 429 怎么退避" → 计划完成、`lookup_error_playbook` + `search_public_docs`、答复含"可重试/退避策略/处理建议"与 `docs.stripe.com` 来源：[eval_error_playbooks_http_2026-10-18.json](eval_error_playbooks_http_2026-10-18.json)。
 - 过程中修复了模型模式的一个真实缺陷：模型给工具传参可能缺少必填字段，现改为缺字段时回退到规则构造的参数，避免"计划等待 + 工具失败"。
 - 局限：手册是官方文档摘要，不是完整错误码全集；40 条评测是作者手写症状，校验以关键词为主；未调用真实平台 API；厂商文档更新后需要人工复核。
+
+## 持久任务队列（2026-10-18）
+
+流式诊断从"API 进程内执行"升级为"Redis 队列 + 独立 worker"：
+
+- 队列：`developer:tasks:queue`（LPUSH/BRPOP）、任务索引 `developer:tasks:queue-index`、死信 `developer:tasks:dead`；
+- 任务：`developer:task:{id}` 记录 `queued/running/waiting/completed/failed/cancelled`、`attempts`、`worker_id`、`run_id`；
+- 事件：worker 把时间线事件写入 `developer:task-events:{id}`，API 的 SSE 只负责轮询并转发，客户端断开时写 `cancel_requested`；
+- 可靠性：worker 执行失败重试一次（`MAX_ATTEMPTS=2`），耗尽进死信；worker 启动时扫描任务索引，把"worker 已消失"的 `running` 任务重新入队；同一会话用 Redis `SET NX` 防止重复排队；
+- 部署：`docker-compose.yml` 新增 `worker` 服务（复用 `devtrace-app` 镜像，无端口、禁用 HTTP 健康检查），API 与 worker 均启用 `DEVTRACE_TASK_QUEUE=enabled`；同步接口仍走进程内路径。
+
+验证：
+
+- 单元测试 `tests/test_task_queue.py`：成功完成、瞬时失败重试、重试后成功、失败进死信、取消、同会话去重、worker 重启回收、活 worker 任务不回收；
+- Docker + 真实模型 SSE：`started` → 14 个 `timeline` 事件 → `complete`，任务状态 `completed`，`GET /developer/tasks/{id}` 不泄露 payload；报告 [eval_queue_http_2026-10-18.json](eval_queue_http_2026-10-18.json)。
+
+局限：目前只验证单 worker；队列基于 Redis List，没有优先级/延迟队列/定时任务；worker 崩溃后正在执行的那一次会重试（可能重复工具副作用，工单幂等键可防重复），没有多 worker 分片与租约。同步 `/developer/chat` 仍是进程内执行。
 
 ## 依赖安全检查（2026-10-18）
 

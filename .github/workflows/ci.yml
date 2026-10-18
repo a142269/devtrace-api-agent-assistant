@@ -18,7 +18,7 @@ jobs:
           python-version: '3.12'
       - run: python -m pip install --upgrade pip
       - run: pip install -r requirements.txt pytest pytest-cov ruff
-      - run: ruff check --select F api/main.py api/auth.py developer/retrieval.py developer/verifier.py developer/security.py developer/audit_gate.py developer/evaluate_diagnosis.py developer/evaluate_holdout.py developer/evaluate_memory_tasks.py developer/public_docs.py developer/public_knowledge.py developer/ingest_public_docs.py developer/evaluate_public_docs.py developer/error_playbooks.py developer/evaluate_error_playbooks.py tests/test_api_security.py tests/test_retrieval.py tests/test_diagnosis.py tests/test_security.py tests/test_audit_gate.py tests/test_deployment_config.py tests/test_public_docs.py
+      - run: ruff check --select F api/main.py api/auth.py developer/retrieval.py developer/verifier.py developer/security.py developer/audit_gate.py developer/evaluate_diagnosis.py developer/evaluate_holdout.py developer/evaluate_memory_tasks.py developer/public_docs.py developer/public_knowledge.py developer/ingest_public_docs.py developer/evaluate_public_docs.py developer/error_playbooks.py developer/evaluate_error_playbooks.py developer/task_queue.py api/worker.py tests/test_task_queue.py tests/test_api_security.py tests/test_retrieval.py tests/test_diagnosis.py tests/test_security.py tests/test_audit_gate.py tests/test_deployment_config.py tests/test_public_docs.py
       - run: python -m pytest -q tests --cov=developer --cov=api --cov-report=term-missing
       - run: python -m developer.evaluate_holdout --mode rules --output developer/eval_holdout_ci.json
       - run: python -m developer.evaluate_memory_tasks --output developer/eval_memory_tasks_ci.json

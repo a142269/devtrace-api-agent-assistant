@@ -38,6 +38,7 @@ services:
       start_period: 10s
   devtrace:
     build: {context: ., target: production}
+    image: devtrace-app
     ports: ["8000:8000"]
     env_file: [.env]
     environment:
@@ -47,10 +48,31 @@ services:
       CHROMA_PERSIST_DIRECTORY: /app/data/chroma
       DEVELOPER_SANDBOX_URL: http://developer-sandbox:8100
       DEVELOPER_MODEL_MODE: ${DEVELOPER_MODEL_MODE:-anthropic}
+      DEVTRACE_TASK_QUEUE: enabled
     depends_on:
       redis: {condition: service_healthy}
       chromadb: {condition: service_healthy}
       developer-sandbox: {condition: service_started}
+  worker:
+    image: devtrace-app
+    command: ["python", "-m", "api.worker"]
+    # The shared image healthcheck probes port 8000; the worker has no HTTP server.
+    healthcheck:
+      disable: true
+    env_file: [.env]
+    environment:
+      REDIS_URL: redis://:${REDIS_PASSWORD:-change-me-for-local-development}@redis:6379/0
+      CHROMA_HOST: chromadb
+      CHROMA_PORT: "8000"
+      CHROMA_PERSIST_DIRECTORY: /app/data/chroma
+      DEVELOPER_SANDBOX_URL: http://developer-sandbox:8100
+      DEVELOPER_MODEL_MODE: ${DEVELOPER_MODEL_MODE:-anthropic}
+      DEVTRACE_TASK_QUEUE: enabled
+    depends_on:
+      redis: {condition: service_healthy}
+      chromadb: {condition: service_healthy}
+      developer-sandbox: {condition: service_started}
+    restart: unless-stopped
 volumes:
   sandbox-data:
   redis-data:

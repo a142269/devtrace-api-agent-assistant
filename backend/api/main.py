@@ -21,7 +21,8 @@ from redis.exceptions import LockError
 
 from api.auth import authenticated_user, bearer, issue_token, settings as auth_settings, verify_password
 from core.skill_loader import SkillManager
-from developer.assistant import AnthropicDecisionModel, DeveloperAssistant, RuleDecisionModel
+from developer import task_queue
+from developer.assistant import AnthropicDecisionModel, DeveloperAssistant, RuleDecisionModel, _redact
 from developer.data import DOCS
 from developer.events import event_sink
 from developer.public_knowledge import PublicDocsKnowledge
@@ -367,7 +368,78 @@ async def developer_task(task_id: str, user_id: str = Depends(current_user)):
     # but a task owned by another live replica must not be touched.
     if task_is_stale(record) and await _should_repair(_developer.redis, record):
         record = await _mark_interrupted(_developer.redis, task_id, record)
-    return {key: value for key, value in record.items() if key != 'user_id'}
+    return {key: value for key, value in record.items() if key not in ('user_id', 'payload')}
+
+
+def _queue_enabled() -> bool:
+    return os.getenv('DEVTRACE_TASK_QUEUE', '').strip().lower() in {'1', 'true', 'yes', 'enabled', 'redis'}
+
+
+async def _queued_stream(req: 'DeveloperChatRequest', user_id: str,
+                         idempotency_key: Optional[str]):
+    """Enqueue a streamed diagnosis and relay worker events from Redis."""
+    import uuid
+    conversation_id = req.conversation_id or str(uuid.uuid4())
+    task_id = str(uuid.uuid4())
+    session_claimed = await task_queue.try_claim_session(
+        _developer.redis, user_id, conversation_id, task_id)
+    if not session_claimed:
+        raise HTTPException(409, '该请求或会话正在处理中，请稍后重试')
+    try:
+        await task_queue.enqueue(_developer.redis, task_id, user_id,
+                                 _redact(req.message), conversation_id)
+    except Exception:
+        await task_queue.release_session(_developer.redis, user_id, conversation_id)
+        raise
+
+    async def stream():
+        import time
+        terminal = False
+        offset = 0
+        last_beat = time.monotonic()
+        try:
+            yield f'event: started\ndata: {json.dumps({"task_id": task_id})}\n\n'
+            while True:
+                for raw in await task_queue.read_events(_developer.redis, task_id, offset):
+                    offset += 1
+                    yield f'event: timeline\ndata: {raw}\n\n'
+                record = await task_queue.get_task(_developer.redis, task_id) or {}
+                status = record.get('status')
+                if status in {'completed', 'waiting'}:
+                    run_id = record.get('run_id')
+                    raw = await _developer.redis.get(f'developer:run:{run_id}') if run_id else None
+                    result = json.loads(raw).get('response') if raw else None
+                    if result:
+                        terminal = True
+                        yield f'event: complete\ndata: {json.dumps(result, ensure_ascii=False)}\n\n'
+                    else:
+                        terminal = True
+                        yield 'event: error\ndata: ' + json.dumps(
+                            {'status': 500, 'detail': '任务已完成但结果不可用'}, ensure_ascii=False) + '\n\n'
+                    break
+                if status in {'failed', 'cancelled', 'interrupted'}:
+                    terminal = True
+                    detail = record.get('error') or '任务已取消或中断，请使用同一会话重试'
+                    yield 'event: error\ndata: ' + json.dumps(
+                        {'status': 500, 'detail': detail}, ensure_ascii=False) + '\n\n'
+                    break
+                now = time.monotonic()
+                if now - last_beat >= 15:
+                    last_beat = now
+                    yield ': heartbeat\n\n'
+                await asyncio.sleep(0.2)
+        except asyncio.CancelledError:
+            await asyncio.shield(task_queue.request_cancel(_developer.redis, task_id))
+            raise
+        finally:
+            if not terminal:
+                try:
+                    await asyncio.shield(task_queue.request_cancel(_developer.redis, task_id))
+                except BaseException:
+                    pass
+
+    return StreamingResponse(stream(), media_type='text/event-stream',
+                             headers={'Cache-Control': 'no-cache', 'X-Accel-Buffering': 'no'})
 
 
 @app.post('/developer/chat/stream', tags=['开发者助手'])
@@ -375,6 +447,8 @@ async def developer_chat_stream(req: DeveloperChatRequest, user_id: str = Depend
                                 idempotency_key: Optional[str] = Header(default=None, alias='Idempotency-Key', max_length=120)):
     if _developer is None:
         raise HTTPException(503, '开发者助手未就绪')
+    if _queue_enabled():
+        return await _queued_stream(req, user_id, idempotency_key)
     async def stream():
         import uuid
         task_id = str(uuid.uuid4())

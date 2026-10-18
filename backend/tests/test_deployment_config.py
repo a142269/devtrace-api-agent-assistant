@@ -20,7 +20,10 @@ class DeploymentConfigTests(unittest.TestCase):
                 self.assertNotIn("ports", services[name])
 
     def test_only_the_application_is_exposed(self):
-        self.assertEqual(compose()["services"]["devtrace"]["ports"], ["8000:8000"])
+        services = compose()["services"]
+        self.assertEqual(services["devtrace"]["ports"], ["8000:8000"])
+        self.assertNotIn("ports", services["worker"])
+        self.assertEqual(services["worker"]["command"], ["python", "-m", "api.worker"])
 
     def test_sandbox_healthcheck_targets_its_own_port(self):
         healthcheck = compose()["services"]["developer-sandbox"].get("healthcheck")
