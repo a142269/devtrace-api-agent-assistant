@@ -12,7 +12,7 @@
   "events": [
     {
       "event": "started",
-      "data": "{\"task_id\": \"3ea44fdc-b974-4af7-b037-20afe86ff0b3\"}"
+      "data": "{\"task_id\": \"0da227c5-0933-461e-b203-07e63392eb00\"}"
     },
     {
       "event": "timeline",
@@ -72,11 +72,11 @@
     },
     {
       "event": "complete",
-      "data": "{\"conversation_id\": \"fb2aa336-d336-49ee-bbfc-2fe80a04b654\", \"run_id\": \"e7192012-284a-411b-8f12-599c59b0f833\", \"answer\": \"已核对模拟平台文档：v1 / 鉴权与权限。\\n请求 req_auth_01 返"
+      "data": "{\"conversation_id\": \"9932d121-754d-4ddc-b16d-179ccf1009f0\", \"run_id\": \"b68bf0f4-b9ea-42f0-b14b-9d03c7b11fac\", \"answer\": \"已核对模拟平台文档：v1 / 鉴权与权限。\\n请求 req_auth_01 返"
     }
   ],
   "http_status": 200,
-  "task_id": "3ea44fdc-b974-4af7-b037-20afe86ff0b3",
+  "task_id": "0da227c5-0933-461e-b203-07e63392eb00",
   "task_http": 200,
   "task_status": "completed",
   "passed": true

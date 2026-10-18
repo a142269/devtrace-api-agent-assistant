@@ -24,6 +24,37 @@ TOOL_EVIDENCE = {
     "search_quota_docs": "对应版本的限流文档片段",
     "create_support_ticket": "本地模拟工单编号",
 }
+# JSON Schemas are shared by the runtime tool registry and native model tool calling.
+TOOL_SCHEMAS = {
+    "search_api_docs": {"type": "object", "properties": {
+        "query": {"type": "string"}, "top_k": {"type": "integer"}},
+        "required": ["query"], "additionalProperties": False},
+    "search_public_docs": {"type": "object", "properties": {
+        "query": {"type": "string"}, "api": {"type": "string"}, "top_k": {"type": "integer"}},
+        "required": ["query"], "additionalProperties": False},
+    "lookup_error_playbook": {"type": "object", "properties": {
+        "symptom": {"type": "string"}, "api": {"type": "string"},
+        "http_status": {"type": "integer"}, "top_k": {"type": "integer"}},
+        "required": ["symptom"], "additionalProperties": False},
+    "get_request_trace": {"type": "object", "properties": {
+        "request_id": {"type": "string"}}, "required": ["request_id"],
+        "additionalProperties": False},
+    "inspect_key_scope": {"type": "object", "properties": {
+        "key_prefix": {"type": "string"}}, "required": ["key_prefix"],
+        "additionalProperties": False},
+    "get_webhook_delivery": {"type": "object", "properties": {
+        "delivery_id": {"type": "string"}}, "required": ["delivery_id"],
+        "additionalProperties": False},
+    "get_related_request_trace": {"type": "object", "properties": {
+        "request_id": {"type": "string"}}, "required": ["request_id"],
+        "additionalProperties": False},
+    "search_quota_docs": {"type": "object", "properties": {
+        "query": {"type": "string"}, "top_k": {"type": "integer"}},
+        "required": ["query"], "additionalProperties": False},
+    "create_support_ticket": {"type": "object", "properties": {
+        "issue_id": {"type": "string"}}, "required": ["issue_id"],
+        "additionalProperties": False},
+}
 KIND_TO_TOOLS = {
     "auth": ["search_api_docs", "get_request_trace", "inspect_key_scope"],
     "quota": ["search_api_docs", "get_request_trace"],

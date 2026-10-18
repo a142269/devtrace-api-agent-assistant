@@ -66,7 +66,7 @@ Vue 生产镜像此前使用 Node 20.20.2 构建通过。Playwright 实际打开
 
 ```text
 python -m unittest discover -s tests
-Ran 86 tests in 5.6s
+Ran 89 tests in 5.7s
 OK
 ```
 
@@ -190,6 +190,19 @@ Agent 新增 `search_public_docs` 工具与 `public_api` 计划路径；模型�
 - 报告：[eval_error_playbooks_2026-10-18.json](eval_error_playbooks_2026-10-18.json)；Docker 真实模型 HTTP 验证 "Stripe 429 怎么退避" → 计划完成、`lookup_error_playbook` + `search_public_docs`、答复含"可重试/退避策略/处理建议"与 `docs.stripe.com` 来源：[eval_error_playbooks_http_2026-10-18.json](eval_error_playbooks_http_2026-10-18.json)。
 - 过程中修复了模型模式的一个真实缺陷：模型给工具传参可能缺少必填字段，现改为缺字段时回退到规则构造的参数，避免"计划等待 + 工具失败"。
 - 局限：手册是官方文档摘要，不是完整错误码全集；40 条评测是作者手写症状，校验以关键词为主；未调用真实平台 API；厂商文档更新后需要人工复核。
+
+## 原生 tool calling（2026-10-18）
+
+行动选择从"提示词要求模型输出 JSON"升级为"原生工具调用 + 两级降级"：
+
+- `planner.py` 新增 `TOOL_SCHEMAS`（与运行时工具注册表一致），`choose_action` 把当前 ready steps 对应工具的 JSON Schema 作为 Anthropic `tools` 传入，`tool_choice={"type":"auto"}`；
+- 模型返回 `tool_use` 时校验必填参数，映射到 ready step；没有 `tool_use` 或参数不足时回退 JSON 提示，再回退规则；provider 不支持 tools 时进程内禁用原生路径（避免每轮失败调用）；
+- 指标新增 `native_tool_calls`，可区分"模型原生调用"与"JSON 降级"；
+- 测试：原生选择、缺参回退、Schema 覆盖 3 个新用例（测试总数 89）。
+
+真实模型验证（DeepSeek Anthropic 兼容端点，Docker + `POST /developer/chat`）：4 次模型调用中 **3 次为原生 tool_use**，行动顺序 `search_api_docs → get_request_trace → inspect_key_scope`，计划完成、`decision_mode=model`、无规则降级；报告 [eval_native_tools_2026-10-18.json](eval_native_tools_2026-10-18.json)。
+
+局限：只验证 Anthropic 兼容协议的原生工具调用；没有并行 tool use；`TOOL_SCHEMAS` 是手工维护的副本（有测试保证与 `TOOL_TITLES` 覆盖一致，但未自动从注册表生成）；不支持的 provider 会静默回退到 JSON 提示。
 
 ## 持久任务队列（2026-10-18）
 

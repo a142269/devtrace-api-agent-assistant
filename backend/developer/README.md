@@ -43,7 +43,7 @@
 
 ## 验证
 
-`python -m unittest discover -s tests` 覆盖 86 项测试：30 条固定案例、跨轮恢复、错误标识后调整、工单去重、用户隔离与敏感信息脱敏，以及证据冲突、关联请求排除、工具记录/用户消息中的提示注入和任务心跳修复。实测结果见 [evaluation_report.md](evaluation_report.md)；模型在线演示需要有效的模型 API Key。
+`python -m unittest discover -s tests` 覆盖 89 项测试：30 条固定案例、跨轮恢复、错误标识后调整、工单去重、用户隔离与敏感信息脱敏，以及证据冲突、关联请求排除、工具记录/用户消息中的提示注入和任务心跳修复。实测结果见 [evaluation_report.md](evaluation_report.md)；模型在线演示需要有效的模型 API Key。
 
 登录取得短期 token 后，写入当前进程环境变量 `DEVTRACE_EVAL_TOKEN`，再运行 HTTP 判定器；不要把 token 写入仓库或命令历史：
 
@@ -74,6 +74,8 @@ python -m developer.evaluate_memory --output developer/eval_memory.json
 错误处置手册：`developer/error_playbooks.json` 收录 Stripe/GitHub/Twilio 各 12 条（共 36 条）结构化错误条目，`lookup_error_playbook` 按症状/API/状态检索，返回可重试性、退避策略、恢复步骤与来源；`python -m developer.evaluate_error_playbooks` 对 40 条症状做回归（2026-10-18 为 40/40）。
 
 持久任务队列：设置 `DEVTRACE_TASK_QUEUE=enabled` 后，流式诊断由 Redis 队列 + `python -m api.worker` 独立执行；失败重试一次、耗尽进死信、worker 重启回收中断任务。Compose 已包含 `worker` 服务；同步接口保持进程内。队列/worker 用例见 `tests/test_task_queue.py`。
+
+原生 tool calling：`AnthropicDecisionModel.choose_action` 优先把 ready steps 的 JSON Schema 作为 Anthropic `tools` 传给模型（`tool_choice=auto`），校验 `tool_use` 参数后执行；不支持的 provider 自动回退 JSON/规则，指标 `native_tool_calls` 可观察。
 
 `evaluate_holdout` 使用 19 条手写标签的独立 holdout 集（`eval_holdout_cases.json` 与专用夹具），规则模式在进程内运行；模型模式需额外传 `--mode model --base-url <地址>` 并设置 `DEVTRACE_EVAL_TOKEN`。2026-10-18 规则与模型均为 19/19，但样本小、标签由作者手写，不等同于第三方隐藏评测。`evaluate_memory_tasks` 用 12 条两轮任务比较同会话恢复与新会话重开（规则模式、stub 工作记忆），衡量跨轮任务成功与重复检索，不代表 ChromaDB 情景记忆或生产延迟。
 

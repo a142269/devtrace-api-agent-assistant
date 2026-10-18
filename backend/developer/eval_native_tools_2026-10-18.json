@@ -1,0 +1,12 @@
+{
+  "decision_mode": "model",
+  "plan_status": "complete",
+  "model_calls": 4,
+  "native_tool_calls": 3,
+  "tools": [
+    "search_api_docs",
+    "get_request_trace",
+    "inspect_key_scope"
+  ],
+  "answer_has_fallback": false
+}

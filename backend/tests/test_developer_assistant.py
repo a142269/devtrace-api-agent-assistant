@@ -105,6 +105,51 @@ class DeveloperAssistantTests(unittest.IsolatedAsyncioTestCase):
         finally:
             model_metrics.reset(token)
 
+    async def test_native_tool_choice_selects_a_ready_step(self):
+        class Messages:
+            async def create(self, **kwargs):
+                self.payload = kwargs
+                return SimpleNamespace(
+                    content=[SimpleNamespace(type='tool_use', name='search_api_docs',
+                                             input={'query': 'v1 auth', 'top_k': 3})],
+                    usage=SimpleNamespace(input_tokens=11, output_tokens=4))
+        model = object.__new__(AnthropicDecisionModel)
+        messages = Messages()
+        model.client = SimpleNamespace(messages=messages)
+        model.model, model.skill, model.native_tools_disabled = 'fake', '', False
+        state = {'kind': 'auth', 'steps': [{'id': 's1', 'tool': 'search_api_docs', 'status': 'pending'}],
+                 'ready_steps': [{'id': 's1', 'tool': 'search_api_docs'}]}
+        decision = await model.choose_action(state, 'req_auth_01 返回 401')
+        self.assertEqual(decision['action'], 'tool')
+        self.assertEqual(decision['tool'], 'search_api_docs')
+        self.assertEqual(decision['step_id'], 's1')
+        self.assertEqual(decision['args']['query'], 'v1 auth')
+        self.assertEqual(messages.payload['tools'][0]['name'], 'search_api_docs')
+        self.assertEqual(messages.payload['tool_choice'], {'type': 'auto'})
+
+    async def test_native_tool_choice_missing_args_falls_back_to_rules(self):
+        class Messages:
+            async def create(self, **kwargs):
+                return SimpleNamespace(
+                    content=[SimpleNamespace(type='tool_use', name='search_api_docs', input={})],
+                    usage=None)
+        model = object.__new__(AnthropicDecisionModel)
+        model.client = SimpleNamespace(messages=Messages())
+        model.model, model.skill, model.native_tools_disabled = 'fake', '', False
+        state = {'kind': 'auth', 'steps': [{'id': 's1', 'tool': 'search_api_docs', 'status': 'pending'}],
+                 'ready_steps': [{'id': 's1', 'tool': 'search_api_docs'}]}
+        decision = await model.choose_action(state, 'req_auth_01 返回 401')
+        self.assertEqual(decision['tool'], 'search_api_docs')
+        self.assertIn('query', decision['args'])
+
+    def test_tool_schemas_cover_every_registered_tool(self):
+        from developer.planner import TOOL_SCHEMAS, TOOL_TITLES
+
+        self.assertEqual(set(TOOL_SCHEMAS), set(TOOL_TITLES))
+        for schema in TOOL_SCHEMAS.values():
+            self.assertEqual(schema['type'], 'object')
+            self.assertIn('properties', schema)
+
     async def test_episodic_search_uses_chroma_supported_filter(self):
         memory = object.__new__(MemoryManager)
         seen = []
