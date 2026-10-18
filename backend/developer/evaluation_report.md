@@ -66,7 +66,7 @@ Vue 生产镜像此前使用 Node 20.20.2 构建通过。Playwright 实际打开
 
 ```text
 python -m unittest discover -s tests
-Ran 77 tests in 5.3s
+Ran 78 tests in 5.4s
 OK
 ```
 
@@ -163,18 +163,18 @@ Docker Desktop（Linux 容器）上使用当前 Dockerfile 与 `requirements.txt
 
 ## 公开 API 文档知识库（2026-10-18）
 
-新增面向真实公开 API 的文档问答路径：`backend/developer/public_docs.py` 内置 **626 条**文档。
+新增面向真实公开 API 的文档问答路径：`backend/developer/public_docs.py` 内置 **641 条**文档。
 
-- 14 条人工摘要：GitHub、Stripe、OpenAI、Twilio、Petstore 与通用 429/503 语义，覆盖认证、限流、Webhook、幂等与常见错误码。
+- 29 条人工摘要：GitHub、Stripe、OpenAI、**DeepSeek**、**Anthropic**、**Gemini**、**通义千问/DashScope**、Twilio、Petstore 与通用 429/503 语义；覆盖认证、限流、Webhook、幂等、上下文超限、流式事件与常见错误码（DeepSeek 的 402 余额不足、Per-account 并发与 user_id 隔离等按官方文档核对）。
 - 612 条从 **Stripe 官方 OpenAPI 完整规格**导入：`stripe/openapi` 仓库（MIT 许可，commit `4d2b98a`，`openapi/spec3.json`）的全部 612 个操作；文件 `backend/developer/public_docs_data/stripe_openapi.json`，运行时自动加载。
 - 每条记录 `api`、`title`、`content`、`source_url`、`license`、`updated`、`tags`；检索为 BM25 词法排序 + API 过滤 + 中文意图词扩展（如"退款"→refund）。
 
 Agent 新增 `search_public_docs` 工具与 `public_api` 计划路径；模型模式在服务端对第三方 API 名做确定性覆盖，答复给出文档标题、来源链接和"公开文档摘要、不连接真实平台"的声明。
 
-- 规则模式评测：18 条问题 **18/18 通过**（12 条概述类 + 6 条 Stripe 接口类），均计划完成、使用 `search_public_docs`、引用对应来源并带公开文档声明；见 [eval_public_docs_2026-10-18.json](eval_public_docs_2026-10-18.json)。
-- Docker + 真实模型 HTTP：问题"Stripe 创建 webhook endpoint 的接口是什么"返回 `kind=public_api`、`plan=complete`、工具 `search_public_docs`，答复引用 `github.com/stripe/openapi` 的 `webhook_endpoints` 操作并带公开文档声明；见 [eval_public_docs_http_2026-10-18.json](eval_public_docs_http_2026-10-18.json)。
+- 规则模式评测：**28 条**问题 **28/28 通过**（12 条概述类 + 6 条 Stripe 接口类 + 10 条 AI API 类），均计划完成、使用 `search_public_docs`、引用对应来源并带公开文档声明；见 [eval_public_docs_2026-10-18.json](eval_public_docs_2026-10-18.json)。
+- Docker + 真实模型 HTTP：问题"DeepSeek 402 Insufficient Balance 是余额不足吗"返回 `kind=public_api`、`plan=complete`、工具 `search_public_docs`，答复引用 `api-docs.deepseek.com` 并区分 402 与 429，带公开文档声明；见 [eval_public_docs_http_2026-10-18.json](eval_public_docs_http_2026-10-18.json)。
 - 导入命令：`python -m developer.ingest_public_docs --source <OpenAPI.json|Markdown> --api <名称> --source-url <链接> --license <许可> --filter "关键词1,关键词2" --output <json>`；生成文件放入 `public_docs_data/` 即自动加载。
-- 局限：导入的是 完整的 612 个操作规格；规格描述可能滞后于厂商文档；中文意图扩展是手工映射；没有调用真实 API，也没有做真实故障注入；许可与归属已随条目记录，商业使用前需自行复核。
+- 局限：Stripe 导入的是完整 612 个操作规格，但规格描述可能滞后于厂商文档；AI API 摘要来自官方公开文档、非全文；中文意图扩展是手工映射；没有调用真实 API，也没有做真实故障注入；许可与归属已随条目记录，商业使用前需自行复核。
 
 ## 依赖安全检查（2026-10-18）
 

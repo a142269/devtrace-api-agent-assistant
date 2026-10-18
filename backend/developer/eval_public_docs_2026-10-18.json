@@ -1,7 +1,7 @@
 {
   "mode": "rules-in-process",
-  "count": 18,
-  "passed": 18,
+  "count": 28,
+  "passed": 28,
   "cases": [
     {
       "id": "github_401",
@@ -82,7 +82,7 @@
       "tools": [
         "search_public_docs"
       ],
-      "answer_chars": 478
+      "answer_chars": 679
     },
     {
       "id": "openai_429",
@@ -91,7 +91,7 @@
       "tools": [
         "search_public_docs"
       ],
-      "answer_chars": 478
+      "answer_chars": 679
     },
     {
       "id": "twilio_429",
@@ -164,6 +164,96 @@
         "search_public_docs"
       ],
       "answer_chars": 906
+    },
+    {
+      "id": "deepseek_401",
+      "passed": true,
+      "reasons": [],
+      "tools": [
+        "search_public_docs"
+      ],
+      "answer_chars": 785
+    },
+    {
+      "id": "deepseek_402",
+      "passed": true,
+      "reasons": [],
+      "tools": [
+        "search_public_docs"
+      ],
+      "answer_chars": 785
+    },
+    {
+      "id": "deepseek_429",
+      "passed": true,
+      "reasons": [],
+      "tools": [
+        "search_public_docs"
+      ],
+      "answer_chars": 853
+    },
+    {
+      "id": "deepseek_compat",
+      "passed": true,
+      "reasons": [],
+      "tools": [
+        "search_public_docs"
+      ],
+      "answer_chars": 785
+    },
+    {
+      "id": "anthropic_429",
+      "passed": true,
+      "reasons": [],
+      "tools": [
+        "search_public_docs"
+      ],
+      "answer_chars": 817
+    },
+    {
+      "id": "anthropic_401_403",
+      "passed": true,
+      "reasons": [],
+      "tools": [
+        "search_public_docs"
+      ],
+      "answer_chars": 859
+    },
+    {
+      "id": "anthropic_stream",
+      "passed": true,
+      "reasons": [],
+      "tools": [
+        "search_public_docs"
+      ],
+      "answer_chars": 859
+    },
+    {
+      "id": "gemini_429",
+      "passed": true,
+      "reasons": [],
+      "tools": [
+        "search_public_docs"
+      ],
+      "answer_chars": 481
+    },
+    {
+      "id": "qwen_401",
+      "passed": true,
+      "reasons": [],
+      "tools": [
+        "search_public_docs"
+      ],
+      "answer_chars": 526
+    },
+    {
+      "id": "openai_context",
+      "passed": true,
+      "reasons": [],
+      "tools": [
+        "search_public_docs"
+      ],
+      "answer_chars": 679
     }
   ],
   "limitations": "Curated summaries plus the full 612-operation Stripe OpenAPI spec; no real API calls; rules mode only; Chinese query expansion is a hand-written map and the corpus needs manual upkeep."

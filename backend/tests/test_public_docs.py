@@ -87,8 +87,18 @@ class PublicDocsTests(unittest.IsolatedAsyncioTestCase):
     def test_api_names_route_to_public_docs_but_mock_ids_keep_their_path(self):
         self.assertEqual(_kind("GitHub API 403 rate limit 怎么处理"), "public_api")
         self.assertEqual(_kind("Stripe Webhook 签名验证失败"), "public_api")
+        self.assertEqual(_kind("DeepSeek 429 并发限制怎么处理"), "public_api")
+        self.assertEqual(_kind("Claude 429 rate_limit_error 怎么处理"), "public_api")
+        self.assertEqual(_kind("通义千问 DashScope 401 怎么排查"), "public_api")
         self.assertEqual(_kind("请求 req_auth_01 返回 401"), "auth")
         self.assertEqual(_kind("Webhook 投递 delivery_01 失败"), "webhook")
+
+    def test_ai_api_docs_are_searchable(self):
+        results = PublicDocsKnowledge().search("DeepSeek 402 余额不足", api="DeepSeek", top_k=3)
+        self.assertTrue(results)
+        self.assertTrue(any("402" in item["title"] for item in results))
+        anthropic = PublicDocsKnowledge().search("Anthropic 429 退避", api="Anthropic", top_k=3)
+        self.assertTrue(any("429" in item["title"] for item in anthropic))
 
     async def test_public_docs_question_is_answered_with_sources(self):
         result = await self.assistant.run("GitHub API 返回 403 rate limit 怎么处理", "u-public")

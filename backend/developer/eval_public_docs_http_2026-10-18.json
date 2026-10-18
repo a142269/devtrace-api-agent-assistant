@@ -9,5 +9,5 @@
   "has_source": true,
   "has_spec_operation": true,
   "has_public_disclaimer": true,
-  "answer_excerpt": "参考公开文档《Stripe：POST /v1/webhook_endpoints》（https://github.com/stripe/openapi）：Stripe API 2026-09-30.endive：POST /v1/webhook_endpoints Create a webhook endpoint 响应：200 Successful response.; default Error response.\n参考公开文档《Stripe：POST /v1/webhook_endpoints/{webhook_endpoint}》（https://github.com/stripe/openapi）：Stripe API 2026-09-30.endive：POST /v1/webhook_endpoints/{webhook_endpoint} Update a webhook "
+  "answer_excerpt": "参考公开文档《DeepSeek API：402 Insufficient Balance》（https://api-docs.deepseek.com/quick_start/error_codes）：DeepSeek 在账户余额不足时返回 402 Insufficient Balance。这是计费问题，重试不会成功；应检查账户余额并充值后再请求，与 429 限流（请求过快/并发超限）要区分处理。\n参考公开文档《DeepSeek API：401 Authentication Fails》（https://api-docs.deepseek.com/quick_start/error_codes）：DeepSeek API 在 API Key 错误或缺失时返回 401 Authentication Fails；请求使用 Authorization: Bearer <DeepSeek API "
 }

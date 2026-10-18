@@ -43,7 +43,7 @@
 
 ## 验证
 
-`python -m unittest discover -s tests` 覆盖 77 项测试：30 条固定案例、跨轮恢复、错误标识后调整、工单去重、用户隔离与敏感信息脱敏，以及证据冲突、关联请求排除、工具记录/用户消息中的提示注入和任务心跳修复。实测结果见 [evaluation_report.md](evaluation_report.md)；模型在线演示需要有效的模型 API Key。
+`python -m unittest discover -s tests` 覆盖 78 项测试：30 条固定案例、跨轮恢复、错误标识后调整、工单去重、用户隔离与敏感信息脱敏，以及证据冲突、关联请求排除、工具记录/用户消息中的提示注入和任务心跳修复。实测结果见 [evaluation_report.md](evaluation_report.md)；模型在线演示需要有效的模型 API Key。
 
 登录取得短期 token 后，写入当前进程环境变量 `DEVTRACE_EVAL_TOKEN`，再运行 HTTP 判定器；不要把 token 写入仓库或命令历史：
 
@@ -68,7 +68,7 @@ python -m developer.evaluate_public_docs --output developer/eval_public_docs.jso
 python -m developer.evaluate_memory --output developer/eval_memory.json
 ```
 
-公开 API 文档知识库：`developer/public_docs.py` 内置 626 条文档（14 条人工摘要 + 612 条从 Stripe 官方 OpenAPI 完整规格导入，文件在 `public_docs_data/`，运行时自动加载），`search_public_docs` 按 API 检索；可用 `python -m developer.ingest_public_docs --source <OpenAPI.json|Markdown> --api <名称> --source-url <链接> --license <许可> --filter "关键词1,关键词2" --output <json>` 导入自己的文档。`python -m developer.evaluate_public_docs` 对 18 条公开 API 问题做回归（2026-10-18 为 18/18）。
+公开 API 文档知识库：`developer/public_docs.py` 内置 641 条文档（29 条人工摘要，含 GitHub/Stripe/OpenAI/DeepSeek/Anthropic/Gemini/通义千问，+ 612 条 Stripe 官方 OpenAPI 完整规格导入；文件在 `public_docs_data/`，运行时自动加载），`search_public_docs` 按 API 检索；可用 `python -m developer.ingest_public_docs --source <OpenAPI.json|Markdown> --api <名称> --source-url <链接> --license <许可> --filter "关键词1,关键词2" --output <json>` 导入自己的文档。`python -m developer.evaluate_public_docs` 对 28 条公开 API 问题做回归（2026-10-18 为 28/28）。
 
 `evaluate_holdout` 使用 19 条手写标签的独立 holdout 集（`eval_holdout_cases.json` 与专用夹具），规则模式在进程内运行；模型模式需额外传 `--mode model --base-url <地址>` 并设置 `DEVTRACE_EVAL_TOKEN`。2026-10-18 规则与模型均为 19/19，但样本小、标签由作者手写，不等同于第三方隐藏评测。`evaluate_memory_tasks` 用 12 条两轮任务比较同会话恢复与新会话重开（规则模式、stub 工作记忆），衡量跨轮任务成功与重复检索，不代表 ChromaDB 情景记忆或生产延迟。
 
