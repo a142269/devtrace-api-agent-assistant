@@ -38,6 +38,18 @@ CASES = [
      "source": "twilio.com", "title": "Twilio API：429"},
     {"id": "generic_retry", "message": "公开 API 文档里 HTTP 429 和 503 的 Retry-After 应该怎么用",
      "source": "developer.mozilla.org", "title": "HTTP 429/503"},
+    {"id": "stripe_spec_payment_intent", "message": "Stripe 创建 PaymentIntent 的接口是哪个",
+     "source": "github.com/stripe/openapi", "title": "POST /v1/payment_intents"},
+    {"id": "stripe_spec_webhook", "message": "Stripe 创建 webhook endpoint 的接口是什么",
+     "source": "github.com/stripe/openapi", "title": "POST /v1/webhook_endpoints"},
+    {"id": "stripe_spec_refund", "message": "Stripe 退款接口怎么调用",
+     "source": "github.com/stripe/openapi", "title": "POST /v1/refunds"},
+    {"id": "stripe_spec_charge", "message": "Stripe 查询 charge 的接口",
+     "source": "github.com/stripe/openapi", "title": "GET /v1/charges"},
+    {"id": "stripe_spec_dispute_close", "message": "Stripe 关闭 dispute 的接口",
+     "source": "github.com/stripe/openapi", "title": "/v1/disputes/{dispute}/close"},
+    {"id": "stripe_spec_events", "message": "Stripe 事件列表 events 接口",
+     "source": "github.com/stripe/openapi", "title": "GET /v1/events"},
 ]
 
 
@@ -123,8 +135,9 @@ async def evaluate():
         "passed": sum(int(row["passed"]) for row in rows),
         "cases": rows,
         "limitations": (
-            "Curated attributed summaries of public documentation, not full vendor specs; "
-            "no real API calls; rules mode only; the corpus is small and hand-maintained."
+            "Curated summaries plus the full 612-operation Stripe OpenAPI spec; "
+            "no real API calls; rules mode only; "
+            "Chinese query expansion is a hand-written map and the corpus needs manual upkeep."
         ),
     }
 

@@ -75,6 +75,15 @@ class PublicDocsTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(results[0]["api"], "GitHub")
         self.assertTrue(any("速率限制" in item["title"] for item in results))
 
+    def test_imported_openapi_documents_are_loaded_and_searchable(self):
+        knowledge = PublicDocsKnowledge()
+        self.assertGreaterEqual(knowledge.count(), 100)
+        results = knowledge.search("Stripe 创建 webhook endpoint 接口", api="Stripe", top_k=3)
+        self.assertTrue(results)
+        self.assertTrue(any("webhook_endpoints" in item["title"] for item in results))
+        self.assertTrue(any(item["source_url"] == "https://github.com/stripe/openapi"
+                            for item in results))
+
     def test_api_names_route_to_public_docs_but_mock_ids_keep_their_path(self):
         self.assertEqual(_kind("GitHub API 403 rate limit 怎么处理"), "public_api")
         self.assertEqual(_kind("Stripe Webhook 签名验证失败"), "public_api")

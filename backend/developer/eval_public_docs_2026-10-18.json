@@ -1,7 +1,7 @@
 {
   "mode": "rules-in-process",
-  "count": 12,
-  "passed": 12,
+  "count": 18,
+  "passed": 18,
   "cases": [
     {
       "id": "github_401",
@@ -46,7 +46,7 @@
       "tools": [
         "search_public_docs"
       ],
-      "answer_chars": 569
+      "answer_chars": 669
     },
     {
       "id": "stripe_rate_limit",
@@ -55,7 +55,7 @@
       "tools": [
         "search_public_docs"
       ],
-      "answer_chars": 569
+      "answer_chars": 583
     },
     {
       "id": "stripe_webhook",
@@ -64,7 +64,7 @@
       "tools": [
         "search_public_docs"
       ],
-      "answer_chars": 633
+      "answer_chars": 751
     },
     {
       "id": "stripe_idempotency",
@@ -73,7 +73,7 @@
       "tools": [
         "search_public_docs"
       ],
-      "answer_chars": 594
+      "answer_chars": 608
     },
     {
       "id": "openai_401",
@@ -110,7 +110,61 @@
         "search_public_docs"
       ],
       "answer_chars": 695
+    },
+    {
+      "id": "stripe_spec_payment_intent",
+      "passed": true,
+      "reasons": [],
+      "tools": [
+        "search_public_docs"
+      ],
+      "answer_chars": 731
+    },
+    {
+      "id": "stripe_spec_webhook",
+      "passed": true,
+      "reasons": [],
+      "tools": [
+        "search_public_docs"
+      ],
+      "answer_chars": 806
+    },
+    {
+      "id": "stripe_spec_refund",
+      "passed": true,
+      "reasons": [],
+      "tools": [
+        "search_public_docs"
+      ],
+      "answer_chars": 715
+    },
+    {
+      "id": "stripe_spec_charge",
+      "passed": true,
+      "reasons": [],
+      "tools": [
+        "search_public_docs"
+      ],
+      "answer_chars": 853
+    },
+    {
+      "id": "stripe_spec_dispute_close",
+      "passed": true,
+      "reasons": [],
+      "tools": [
+        "search_public_docs"
+      ],
+      "answer_chars": 731
+    },
+    {
+      "id": "stripe_spec_events",
+      "passed": true,
+      "reasons": [],
+      "tools": [
+        "search_public_docs"
+      ],
+      "answer_chars": 906
     }
   ],
-  "limitations": "Curated attributed summaries of public documentation, not full vendor specs; no real API calls; rules mode only; the corpus is small and hand-maintained."
+  "limitations": "Curated summaries plus the full 612-operation Stripe OpenAPI spec; no real API calls; rules mode only; Chinese query expansion is a hand-written map and the corpus needs manual upkeep."
 }

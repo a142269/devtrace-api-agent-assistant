@@ -30,7 +30,8 @@ def _load_spec(path: Path):
     return json.loads(text)
 
 
-def operations_from_openapi(spec, api, source_url, license_text, max_operations=100):
+def operations_from_openapi(spec, api, source_url, license_text, max_operations=100, filters=None):
+    filters = [item.strip().lower() for item in (filters or []) if item.strip()]
     title = (spec.get("info") or {}).get("title") or f"{api} API"
     version = str((spec.get("info") or {}).get("version") or "")
     documents = []
@@ -44,6 +45,10 @@ def operations_from_openapi(spec, api, source_url, license_text, max_operations=
                 continue
             operation_id = operation.get("operationId") or f"{method.upper()} {path}"
             summary = operation.get("summary") or operation.get("description") or ""
+            tags = [str(tag) for tag in (operation.get("tags") or [])]
+            haystack = f"{path} {operation_id} {summary} {' '.join(tags)}".lower()
+            if filters and not any(word in haystack for word in filters):
+                continue
             parameters = []
             for parameter in (operation.get("parameters") or [])[:6]:
                 if isinstance(parameter, dict):
@@ -66,7 +71,7 @@ def operations_from_openapi(spec, api, source_url, license_text, max_operations=
                 "source_url": source_url,
                 "license": license_text,
                 "updated": "imported",
-                "tags": [method.lower()] + [str(tag) for tag in (operation.get("tags") or [])][:4],
+                "tags": [method.lower()] + tags[:4],
             })
             if len(documents) >= max_operations:
                 return documents
@@ -105,14 +110,17 @@ def main():
     parser.add_argument("--license", required=True)
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--max-operations", type=int, default=100)
+    parser.add_argument("--filter", default="",
+                        help="comma-separated keywords; keep operations whose path/operationId/summary/tags match any")
     args = parser.parse_args()
 
+    filters = [item for item in args.filter.split(",") if item.strip()]
     if args.source.suffix.lower() in {".md", ".markdown"}:
         documents = documents_from_markdown(_read_text(args.source), args.api,
                                             args.source_url, args.license)
     else:
         documents = operations_from_openapi(_load_spec(args.source), args.api, args.source_url,
-                                            args.license, args.max_operations)
+                                            args.license, args.max_operations, filters)
     args.output.parent.mkdir(parents=True, exist_ok=True)
     args.output.write_text(json.dumps(documents, ensure_ascii=False, indent=2), encoding="utf-8")
     print(json.dumps({"documents": len(documents), "output": str(args.output)}, ensure_ascii=False))

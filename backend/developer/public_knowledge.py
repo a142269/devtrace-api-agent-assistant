@@ -2,6 +2,34 @@
 from developer.public_docs import PUBLIC_DOCS
 from developer.retrieval import lexical_rank
 
+# Chinese questions are common; map intent words to the English terms used by
+# imported OpenAPI documents so lexical ranking can reach the right operation.
+QUERY_EXPANSIONS = {
+    "退款": "refund refunds",
+    "创建": "create post",
+    "新建": "create post",
+    "查询": "get retrieve list",
+    "获取": "get retrieve",
+    "关闭": "close",
+    "取消": "cancel",
+    "确认": "confirm",
+    "事件": "event events",
+    "争议": "dispute disputes",
+    "纠纷": "dispute",
+    "支付": "payment payment_intent",
+    "客户": "customer customers",
+    "订阅": "subscription subscriptions",
+    "发票": "invoice invoices",
+    "回调": "webhook",
+    "接口": "endpoint",
+    "列表": "list",
+}
+
+
+def expand_query(query: str) -> str:
+    additions = [english for chinese, english in QUERY_EXPANSIONS.items() if chinese in query]
+    return query + " " + " ".join(additions) if additions else query
+
 
 class PublicDocsKnowledge:
     """Deterministic lexical retrieval over a small attributed document set.
@@ -15,11 +43,12 @@ class PublicDocsKnowledge:
         self.documents = list(documents if documents is not None else PUBLIC_DOCS)
 
     def search(self, query, api="", top_k=4):
+        expanded = expand_query(query)
         candidates = [doc for doc in self.documents
                       if not api or doc.get("api") == api]
         if not candidates:
             candidates = self.documents
-        ranked = lexical_rank(query, candidates)
+        ranked = lexical_rank(expanded, candidates)
         if not ranked:
             ranked = candidates
         if api:
