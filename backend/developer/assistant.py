@@ -22,8 +22,8 @@ logger = logging.getLogger(__name__)
 model_metrics = contextvars.ContextVar('developer_model_metrics', default=None)
 
 from developer.error_playbooks import lookup_playbook
-from developer.planner import (KIND_TO_TOOLS, TOOL_EVIDENCE, TOOL_SCHEMAS, TOOL_TITLES,
-                               _approved_tools, _ready_steps)
+from developer.planner import (KIND_TO_TOOLS, PUBLIC_API_MCP_TOOLS, TOOL_EVIDENCE, TOOL_SCHEMAS,
+                               TOOL_TITLES, _approved_tools, _ready_steps)
 from developer.public_docs import detect_public_api
 from developer.prompts import PROMPT_VERSION, render
 from developer.security import scan_observation, scan_untrusted, tainted_sources
@@ -111,6 +111,8 @@ class RuleDecisionModel:
             "search_api_docs": {"query": f"{state.get('api_version', 'v1')} {state['kind']} {message[:100]}", "top_k": 3},
             "search_public_docs": {"query": message[:300], "api": detect_public_api(message)},
             "lookup_error_playbook": playbook_args,
+            "mcp_search_public_docs": {"query": message[:300], "api": detect_public_api(message)},
+            "mcp_lookup_error_playbook": playbook_args,
             "get_request_trace": {"request_id": issue_id},
             "inspect_key_scope": {"key_prefix": state.get("key_prefix", "")},
             "get_webhook_delivery": {"delivery_id": issue_id},
@@ -146,12 +148,12 @@ class RuleDecisionModel:
                 lines.append(f"投递 {data.get('delivery_id')} 返回 {data.get('status')}：{_untrusted_text(data.get('error_summary'))}。")
             elif item["tool"] == "create_support_ticket" and isinstance(data, dict):
                 lines.append(f"已创建模拟工单 {data.get('ticket_id')}。")
-            elif item["tool"] == "search_public_docs" and isinstance(data, list):
+            elif item["tool"] in {"search_public_docs", "mcp_search_public_docs"} and isinstance(data, list):
                 for doc in data[:3]:
                     if isinstance(doc, dict):
                         lines.append(
                             f"参考公开文档《{doc.get('title')}》（{doc.get('source_url')}）：{doc.get('content')}")
-            elif item["tool"] == "lookup_error_playbook" and isinstance(data, list):
+            elif item["tool"] in {"lookup_error_playbook", "mcp_lookup_error_playbook"} and isinstance(data, list):
                 for entry in data[:2]:
                     if not isinstance(entry, dict):
                         continue
@@ -322,7 +324,9 @@ class AnthropicDecisionModel(RuleDecisionModel):
                 # The model may omit required fields; fall back to the rule-built args
                 # instead of executing a call that is guaranteed to fail validation.
                 required = {"lookup_error_playbook": {"symptom"},
-                            "search_public_docs": {"query"}}.get(selected["tool"], set())
+                            "mcp_lookup_error_playbook": {"symptom"},
+                            "search_public_docs": {"query"},
+                            "mcp_search_public_docs": {"query"}}.get(selected["tool"], set())
                 if required.issubset(result["args"]):
                     return result
                 fallback = await super().choose_action(state, message)
@@ -350,10 +354,13 @@ class DeveloperAssistant:
 
     def __init__(self, *, memory: Any, knowledge: Any, redis_client: Any, model: Any,
                  tool_manager: MCPToolManager, sandbox_url: str, dynamic_scope: bool = True,
-                 public_knowledge: Any = None):
+                 public_knowledge: Any = None, mcp_client: Any = None,
+                 mcp_public_tools: bool = False):
         self.memory = memory
         self.knowledge = knowledge
         self.public_knowledge = public_knowledge
+        self.mcp_client = mcp_client
+        self.mcp_public_tools = bool(mcp_public_tools and mcp_client is not None)
         self.redis = redis_client
         self.model = model
         self.tools = tool_manager
@@ -388,6 +395,18 @@ class DeveloperAssistant:
             return lookup_playbook(params["symptom"], api=params.get("api", ""),
                                    http_status=int(http_status) if http_status else None,
                                    top_k=params.get("top_k", 3))
+
+        async def mcp_public_docs(params, _context):
+            return await self.mcp_client.call_tool("search_public_docs", {
+                "query": params["query"], "api": params.get("api", ""),
+                "top_k": params.get("top_k", 4)})
+
+        async def mcp_playbook(params, _context):
+            arguments = {"symptom": params["symptom"], "api": params.get("api", ""),
+                         "top_k": params.get("top_k", 3)}
+            if params.get("http_status"):
+                arguments["http_status"] = int(params["http_status"])
+            return await self.mcp_client.call_tool("lookup_error_playbook", arguments)
 
         async def sandbox_get(path: str):
             async with httpx.AsyncClient(timeout=10) as client:
@@ -430,6 +449,14 @@ class DeveloperAssistant:
              ["symptom"], 0),
             ("create_support_ticket", ticket, {"issue_id": "string"}, ["issue_id"], 0),
         ]
+        if self.mcp_public_tools:
+            definitions.extend([
+                ("mcp_search_public_docs", mcp_public_docs,
+                 {"query": "string", "api": "string", "top_k": "integer"}, ["query"], 0),
+                ("mcp_lookup_error_playbook", mcp_playbook,
+                 {"symptom": "string", "api": "string", "http_status": "integer", "top_k": "integer"},
+                 ["symptom"], 0),
+            ])
         for name, handler, props, required, ttl in definitions:
             self.tools.register(Tool(
                 name=name, description=TOOL_TITLES[name], handler=handler,
@@ -473,7 +500,9 @@ class DeveloperAssistant:
             plan = await self.model.make_plan(message, memory_text, None)
             kind = (_kind(message, issue_id) if issue_id else
                     plan.get("kind") if plan.get("kind") in KIND_TO_TOOLS else _kind(message))
-            proposed, chosen, adjustments = _approved_tools(kind, plan.get("tools"))
+            allowed_override = (PUBLIC_API_MCP_TOOLS
+                                if self.mcp_public_tools and kind == 'public_api' else None)
+            proposed, chosen, adjustments = _approved_tools(kind, plan.get("tools"), allowed_override)
             if issue_id.startswith('req_auth_v2_') and 'get_request_trace' in chosen and 'search_api_docs' in chosen:
                 chosen.remove('get_request_trace')
                 chosen.insert(0, 'get_request_trace')
@@ -771,8 +800,12 @@ class DeveloperAssistant:
             return f"找到 {len(data or [])} 个模拟平台文档片段"
         if tool == "search_public_docs":
             return f"找到 {len(data or [])} 条公开 API 文档摘要"
+        if tool == "mcp_search_public_docs":
+            return f"MCP 返回 {len(data or [])} 条公开 API 文档摘要"
         if tool == "lookup_error_playbook":
             return f"找到 {len(data or [])} 条错误处置条目"
+        if tool == "mcp_lookup_error_playbook":
+            return f"MCP 返回 {len(data or [])} 条错误处置条目"
         if tool in {"get_request_trace", "get_related_request_trace"}:
             return f"HTTP {data.get('status')}；{_untrusted_text(data.get('error_summary'))}"
         if tool == "inspect_key_scope":

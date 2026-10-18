@@ -6,6 +6,8 @@ TOOL_TITLES = {
     "search_api_docs": "检索对应版本的 API 文档",
     "search_public_docs": "检索公开 API 文档摘要",
     "lookup_error_playbook": "查询错误处置手册",
+    "mcp_search_public_docs": "通过 MCP 检索公开 API 文档",
+    "mcp_lookup_error_playbook": "通过 MCP 查询错误处置手册",
     "get_request_trace": "核对脱敏请求记录",
     "inspect_key_scope": "核对密钥状态与权限摘要",
     "get_webhook_delivery": "核对 Webhook 投递记录",
@@ -17,6 +19,8 @@ TOOL_EVIDENCE = {
     "search_api_docs": "匹配故障类型和 API 版本的文档片段",
     "search_public_docs": "公开 API 文档摘要与来源链接",
     "lookup_error_playbook": "错误码、可重试性、退避与恢复步骤",
+    "mcp_search_public_docs": "通过 MCP 工具返回的公开文档片段与来源",
+    "mcp_lookup_error_playbook": "通过 MCP 工具返回的错误码、可重试性与恢复步骤",
     "get_request_trace": "request_id 对应的脱敏状态和错误摘要",
     "inspect_key_scope": "key_prefix 对应的状态与 scope 摘要",
     "get_webhook_delivery": "delivery_id 对应的状态、重试次数与错误摘要",
@@ -54,6 +58,13 @@ TOOL_SCHEMAS = {
     "create_support_ticket": {"type": "object", "properties": {
         "issue_id": {"type": "string"}}, "required": ["issue_id"],
         "additionalProperties": False},
+    "mcp_search_public_docs": {"type": "object", "properties": {
+        "query": {"type": "string"}, "api": {"type": "string"}, "top_k": {"type": "integer"}},
+        "required": ["query"], "additionalProperties": False},
+    "mcp_lookup_error_playbook": {"type": "object", "properties": {
+        "symptom": {"type": "string"}, "api": {"type": "string"},
+        "http_status": {"type": "integer"}, "top_k": {"type": "integer"}},
+        "required": ["symptom"], "additionalProperties": False},
 }
 KIND_TO_TOOLS = {
     "auth": ["search_api_docs", "get_request_trace", "inspect_key_scope"],
@@ -61,15 +72,17 @@ KIND_TO_TOOLS = {
     "webhook": ["search_api_docs", "get_webhook_delivery"],
     "public_api": ["lookup_error_playbook", "search_public_docs"],
 }
+# When enabled, the public_api path uses the MCP-hosted tools instead of local ones.
+PUBLIC_API_MCP_TOOLS = ["mcp_lookup_error_playbook", "mcp_search_public_docs"]
 TOOL_DEPENDENCIES = {"inspect_key_scope": {"get_request_trace"},
                      "get_related_request_trace": {"get_webhook_delivery"},
                      "search_quota_docs": {"get_related_request_trace"}}
 
 
-def _approved_tools(kind: str, proposed: Any) -> tuple[list[str], list[str], list[str]]:
+def _approved_tools(kind: str, proposed: Any, allowed: list[str] | None = None) -> tuple[list[str], list[str], list[str]]:
     """Keep model ordering where safe, then supply the mandatory evidence chain."""
     raw = [tool for tool in proposed[:10] if isinstance(tool, str)] if isinstance(proposed, list) else []
-    allowed = KIND_TO_TOOLS[kind]
+    allowed = allowed or KIND_TO_TOOLS[kind]
     chosen = list(dict.fromkeys(tool for tool in raw if tool in allowed))
     adjustments = []
     if any(tool not in allowed for tool in raw):

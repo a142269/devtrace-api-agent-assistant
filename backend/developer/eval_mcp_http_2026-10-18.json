@@ -1,0 +1,13 @@
+{
+  "decision_mode": "model",
+  "plan_status": "complete",
+  "tools": [
+    "mcp_lookup_error_playbook",
+    "mcp_search_public_docs"
+  ],
+  "mcp_only": true,
+  "has_recovery": true,
+  "has_source": true,
+  "has_public_disclaimer": true,
+  "passed": true
+}

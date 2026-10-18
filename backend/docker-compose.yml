@@ -49,6 +49,7 @@ services:
       DEVELOPER_SANDBOX_URL: http://developer-sandbox:8100
       DEVELOPER_MODEL_MODE: ${DEVELOPER_MODEL_MODE:-anthropic}
       DEVTRACE_TASK_QUEUE: enabled
+      DEVTRACE_MCP_PUBLIC_TOOLS: enabled
     depends_on:
       redis: {condition: service_healthy}
       chromadb: {condition: service_healthy}
@@ -68,6 +69,7 @@ services:
       DEVELOPER_SANDBOX_URL: http://developer-sandbox:8100
       DEVELOPER_MODEL_MODE: ${DEVELOPER_MODEL_MODE:-anthropic}
       DEVTRACE_TASK_QUEUE: enabled
+      DEVTRACE_MCP_PUBLIC_TOOLS: enabled
     depends_on:
       redis: {condition: service_healthy}
       chromadb: {condition: service_healthy}

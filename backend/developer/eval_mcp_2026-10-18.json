@@ -1,0 +1,108 @@
+{
+  "mode": "rules-in-process+mcp",
+  "server": {
+    "protocolVersion": "2024-11-05",
+    "capabilities": {
+      "tools": {}
+    },
+    "serverInfo": {
+      "name": "devtrace-mcp",
+      "version": "1.0.0"
+    }
+  },
+  "count": 10,
+  "passed": 10,
+  "cases": [
+    {
+      "id": "github_401",
+      "passed": true,
+      "reasons": [],
+      "tools": [
+        "mcp_lookup_error_playbook",
+        "mcp_search_public_docs"
+      ]
+    },
+    {
+      "id": "github_rate_limit",
+      "passed": true,
+      "reasons": [],
+      "tools": [
+        "mcp_lookup_error_playbook",
+        "mcp_search_public_docs"
+      ]
+    },
+    {
+      "id": "stripe_401",
+      "passed": true,
+      "reasons": [],
+      "tools": [
+        "mcp_lookup_error_playbook",
+        "mcp_search_public_docs"
+      ]
+    },
+    {
+      "id": "stripe_429",
+      "passed": true,
+      "reasons": [],
+      "tools": [
+        "mcp_lookup_error_playbook",
+        "mcp_search_public_docs"
+      ]
+    },
+    {
+      "id": "stripe_webhook",
+      "passed": true,
+      "reasons": [],
+      "tools": [
+        "mcp_lookup_error_playbook",
+        "mcp_search_public_docs"
+      ]
+    },
+    {
+      "id": "deepseek_402",
+      "passed": true,
+      "reasons": [],
+      "tools": [
+        "mcp_lookup_error_playbook",
+        "mcp_search_public_docs"
+      ]
+    },
+    {
+      "id": "anthropic_429",
+      "passed": true,
+      "reasons": [],
+      "tools": [
+        "mcp_lookup_error_playbook",
+        "mcp_search_public_docs"
+      ]
+    },
+    {
+      "id": "gemini_429",
+      "passed": true,
+      "reasons": [],
+      "tools": [
+        "mcp_lookup_error_playbook",
+        "mcp_search_public_docs"
+      ]
+    },
+    {
+      "id": "twilio_429",
+      "passed": true,
+      "reasons": [],
+      "tools": [
+        "mcp_lookup_error_playbook",
+        "mcp_search_public_docs"
+      ]
+    },
+    {
+      "id": "generic_retry",
+      "passed": true,
+      "reasons": [],
+      "tools": [
+        "mcp_lookup_error_playbook",
+        "mcp_search_public_docs"
+      ]
+    }
+  ],
+  "limitations": "In-process MCP transport (stdio transport is implemented but not exercised here); rules mode only; the MCP server hosts two documentation tools, not the full tool set."
+}

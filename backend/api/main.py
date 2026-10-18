@@ -209,11 +209,22 @@ async def lifespan(app: FastAPI):
     )
     model = RuleDecisionModel() if mode == "rules" else AnthropicDecisionModel(
         key, model_name, base_url, skills.prompt_for("API 401 429 webhook", "developer"))
+    mcp_client = None
+    mcp_enabled = os.getenv('DEVTRACE_MCP_PUBLIC_TOOLS', '').strip().lower() in {
+        '1', 'true', 'yes', 'enabled'}
+    if mcp_enabled:
+        from mcp.client import InProcessTransport, MCPClient
+        from mcp.server import build_default_server
+
+        mcp_client = MCPClient(InProcessTransport(build_default_server()))
+        await mcp_client.initialize()
+        logger.info('MCP public tools enabled (server=%s)', mcp_client.server_info.get('serverInfo', {}))
     _developer = DeveloperAssistant(
         memory=memory, knowledge=knowledge, redis_client=memory._redis, model=model,
         tool_manager=MCPToolManager(api_key=key, base_url=base_url, model=model_name),
         sandbox_url=os.getenv("DEVELOPER_SANDBOX_URL", "http://developer-sandbox:8100"),
         public_knowledge=PublicDocsKnowledge(),
+        mcp_client=mcp_client, mcp_public_tools=mcp_enabled,
     )
     heartbeat = None
     try:
@@ -230,6 +241,8 @@ async def lifespan(app: FastAPI):
         if heartbeat is not None:
             heartbeat.cancel()
             await asyncio.gather(heartbeat, return_exceptions=True)
+        if mcp_client is not None:
+            await mcp_client.close()
         await memory.close()
         _developer = None
 
