@@ -1,0 +1,63 @@
+{
+  "mode": "model",
+  "base_url": "http://127.0.0.1:18002",
+  "count": 3,
+  "passed": 3,
+  "fallbacks": 0,
+  "diagnosis_correct": 2,
+  "diagnosis_applicable": 2,
+  "evidence_supported": 3,
+  "mean_tool_calls": 2.33,
+  "median_elapsed_ms": 4992.6,
+  "cases": [
+    {
+      "case": "req_auth_01",
+      "family": "auth",
+      "passed": true,
+      "reasons": [],
+      "decision_mode": "model",
+      "tool_order": [
+        "search_api_docs",
+        "get_request_trace",
+        "inspect_key_scope"
+      ],
+      "tool_actions": 3,
+      "plan_adjustments": [],
+      "diagnosis_correct": true,
+      "evidence_supported": true,
+      "elapsed_ms": 4992.6
+    },
+    {
+      "case": "req_quota_01",
+      "family": "quota",
+      "passed": true,
+      "reasons": [],
+      "decision_mode": "model",
+      "tool_order": [
+        "search_api_docs",
+        "get_request_trace"
+      ],
+      "tool_actions": 2,
+      "plan_adjustments": [],
+      "diagnosis_correct": true,
+      "evidence_supported": true,
+      "elapsed_ms": 5039.7
+    },
+    {
+      "case": "delivery_01",
+      "family": "webhook",
+      "passed": true,
+      "reasons": [],
+      "decision_mode": "model",
+      "tool_order": [
+        "search_api_docs",
+        "get_webhook_delivery"
+      ],
+      "tool_actions": 2,
+      "plan_adjustments": [],
+      "diagnosis_correct": null,
+      "evidence_supported": true,
+      "elapsed_ms": 4416.6
+    }
+  ]
+}

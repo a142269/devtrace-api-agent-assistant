@@ -1,0 +1,48 @@
+{
+  "events": [
+    "started",
+    "timeline",
+    "timeline",
+    "timeline",
+    "timeline",
+    "timeline",
+    "timeline",
+    "timeline",
+    "timeline",
+    "timeline",
+    "timeline",
+    "complete"
+  ],
+  "task_status": "completed",
+  "decision_mode": "model",
+  "plan_status": "complete",
+  "tools": [
+    "get_request_trace",
+    "search_api_docs"
+  ],
+  "hypotheses": [
+    "minute_quota_exceeded"
+  ],
+  "model_metrics": {
+    "calls": 3,
+    "errors": 0,
+    "latency_ms": 2454.5,
+    "input_tokens": 2173,
+    "output_tokens": 154
+  },
+  "client_elapsed_ms": 4138.3,
+  "recent_runs": [
+    {
+      "kind": "quota",
+      "status": "complete"
+    },
+    {
+      "kind": "webhook",
+      "status": "complete"
+    },
+    {
+      "kind": "quota",
+      "status": "complete"
+    }
+  ]
+}

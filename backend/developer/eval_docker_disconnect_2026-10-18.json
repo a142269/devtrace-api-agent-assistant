@@ -1,0 +1,20 @@
+{
+  "conversation": "disconnect-b1fea15f",
+  "events_before_disconnect": [
+    "started",
+    "timeline"
+  ],
+  "task_id": "a2f2e69a-5f94-44e6-89ae-191fb75b75ff",
+  "status_transitions": [
+    {
+      "status": "cancelled",
+      "after_s": 0.0
+    }
+  ],
+  "follow_up_status_code": 200,
+  "follow_up_plan_status": "complete",
+  "follow_up_tools": [
+    "search_api_docs",
+    "get_request_trace"
+  ]
+}

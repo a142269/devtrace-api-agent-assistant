@@ -7,14 +7,17 @@
 - [完整构建与模块说明](完整构建与模块说明.md)：从数据、工具、计划、记忆到 API/UI 的构建顺序，并逐项对照 Agent 十模块。
 - [工程化审查](工程化审查.md)：与原客服项目对照、已实现范围、生产级差距与面试表述。
 - [实测评测报告](evaluation_report.md)：自动化测试、HTTP、真实配置模型及界面验证结果。
+- [依赖与安全评估](依赖与安全评估_2026-10-18.md)：ChromaDB 漏洞核查、暴露面、处置决定与审计门禁。
 
 ## 运行
 
-- 全栈：在 `backend` 执行 `docker compose up -d --build`。
+- 全栈：在 `backend` 执行 `docker compose up -d --build`。若构建网络无法访问 ChromaDB 的 ONNX 模型地址，可先 `docker compose build --build-arg PRELOAD_ONNX=false`；2026-10-18 的 Docker 全栈实测（规则模式 30/30 HTTP、SSE、断流、并发、跨轮恢复）见 [evaluation_report.md](evaluation_report.md)。
 - 模拟平台单独运行：`python -m uvicorn developer.sandbox:app --port 8100`。
 - Python 服务独立运行时，设置 `DEVELOPER_SANDBOX_URL=http://localhost:8100`，并配置 Redis、ChromaDB 与模型环境变量。
 
 模拟平台的固定记录为 `req_auth_01`～`req_auth_10`、`req_quota_01`～`req_quota_10`、`delivery_01`～`delivery_10`，另有 `delivery_combo_01`～`delivery_combo_10` 组合案例。HTTP 接口提供脱敏请求、密钥前缀权限和投递记录；SQLite 保存模拟工单。
+
+诊断/安全演示另有少量夹具，故意不加入 30 条固定评测集：`req_auth_11`（请求记录称凭证过期，但 `demo-auth-11` 密钥状态为 active，用于证据冲突）、`delivery_combo_11` + `req_ok_01`（关联请求成功，用于排除限流原因）、`delivery_inject_01`（投递记录的错误摘要内含指令文本，用于验证观察不可信边界）。
 
 `req_auth_v2_01` 演示先读取请求记录确认 API 版本，再检索 v2 鉴权文档；版本切换覆盖目前仅限这个模拟案例。
 
@@ -26,9 +29,9 @@
 {"message":"请求 req_auth_01 返回 401，帮我排查","conversation_id":null}
 ```
 
-响应包含 `conversation_id`、`run_id`、`answer`、`plan`、`actions`、`timeline`、`evidence`、`diagnosis`、`memory_used`、`metrics`、可选 `ticket_id` 和 `decision_mode`。`decision_mode` 区分 `model`、`rules` 和 `rules_fallback`。等待补充时可用同一 `conversation_id` 继续。`GET /developer/runs` 和 `GET /developer/runs/{run_id}` 根据认证身份授权；客户端不能指定 `user_id`。
+响应包含 `conversation_id`、`run_id`、`answer`、`plan`、`actions`、`timeline`、`evidence`、`diagnosis`、`security`、`memory_used`、`metrics`、可选 `ticket_id` 和 `decision_mode`。`decision_mode` 区分 `model`、`rules` 和 `rules_fallback`。`diagnosis` 除 `hypotheses`（含 `code`、`description`、`status`、`confidence`、`evidence`、`contradicted_by`、`next_evidence`、`remediation`）外，还有整体 `status`（`evidence_available` / `conflicting_evidence` / `insufficient_evidence`）、`summary`、`conflicts` 和 `linkages`。`security` 给出 `injection_suspected`、`flags`、`tainted_sources` 与 `policy`；`actions[].tainted` 标记来自不可信记录的观察。等待补充时可用同一 `conversation_id` 继续。`GET /developer/runs` 和 `GET /developer/runs/{run_id}` 根据认证身份授权；客户端不能指定 `user_id`。
 
-流式接口的 `started` 事件提供独立的 `task_id`；`GET /developer/tasks/{task_id}` 可查询该用户的状态。断开连接时记录 `cancelled`，同会话可从最近检查点继续。进程异常退出时 `running` 状态不会自动修复。
+流式接口的 `started` 事件提供独立的 `task_id`；`GET /developer/tasks/{task_id}` 可查询该用户的状态。断开连接时记录 `cancelled`，同会话可从最近检查点继续。任务记录带心跳时间：SSE 事件与 15 秒空闲心跳都会刷新 `updated_at`，`running` 超过 240 秒未更新会在查询时改为 `interrupted`，进程启动时也会把上一进程残留的 `running` 一并修正（仅适用于单进程/单副本共享 Redis）。没有持久任务队列，也不会自动重跑中断任务，中断后需在同一会话发送“继续”。
 
 ## 设计边界
 
@@ -40,7 +43,7 @@
 
 ## 验证
 
-`python -m unittest discover -s tests -p test_developer_assistant.py` 覆盖 30 条固定案例、跨轮恢复、错误标识后调整、工单去重、用户隔离与敏感信息脱敏。实测结果见 [evaluation_report.md](evaluation_report.md)；模型在线演示需要有效的模型 API Key。
+`python -m unittest discover -s tests` 覆盖 68 项测试：30 条固定案例、跨轮恢复、错误标识后调整、工单去重、用户隔离与敏感信息脱敏，以及证据冲突、关联请求排除、工具记录/用户消息中的提示注入和任务心跳修复。实测结果见 [evaluation_report.md](evaluation_report.md)；模型在线演示需要有效的模型 API Key。
 
 登录取得短期 token 后，写入当前进程环境变量 `DEVTRACE_EVAL_TOKEN`，再运行 HTTP 判定器；不要把 token 写入仓库或命令历史：
 
@@ -58,9 +61,13 @@ python -m developer.evaluate_planning --output developer/eval_planning.json
 python -m developer.evaluate_recovery --output developer/eval_recovery.json
 python -m developer.evaluate_retrieval --output developer/eval_retrieval.json
 python -m developer.evaluate_scenarios --output developer/eval_scenarios.json
+python -m developer.evaluate_diagnosis --output developer/eval_diagnosis.json
+python -m developer.evaluate_holdout --mode rules --output developer/eval_holdout_rules.json
 python -m developer.evaluate_memory --output developer/eval_memory.json
 ```
 
+`evaluate_holdout` 使用 19 条手写标签的独立 holdout 集（`eval_holdout_cases.json` 与专用夹具），规则模式在进程内运行；模型模式需额外传 `--mode model --base-url <地址>` 并设置 `DEVTRACE_EVAL_TOKEN`。2026-10-18 规则与模型均为 19/19，但样本小、标签由作者手写，不等同于第三方隐藏评测。
+
 检索评测需要可用的 ChromaDB 或本地向量模型。规则规划和故障注入使用进程内模拟平台，不能视作模型的泛化评估。
 
-记忆对照需要独立的 Redis 和 ChromaDB 数据目录，运行时会写入合成用户和测试 collection；请勿使用生产数据存储。脚本直接写入历史摘要，不能用于评估模型摘要质量。依赖扫描结果和尚未解决的漏洞也记录在[升级进度](升级进度.md)中。
+依赖治理：`python -m developer.audit_gate <pip-audit.json>` 只对存在修复版本的漏洞返回非零；无上游修复版本的记录会转为非阻断提示。漏洞核查与处置决定见 [依赖与安全评估](依赖与安全评估_2026-10-18.md)，扫描现状也记录在[升级进度](升级进度.md)中。

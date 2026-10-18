@@ -19,25 +19,43 @@ COPY requirements.txt .
 RUN pip install --upgrade pip && \
     pip install -r requirements.txt
 
-# 预下载 ChromaDB 内置的 ONNX embedding 模型（~79MB），避免运行时下载超时
+# 预下载 ChromaDB 内置的 ONNX embedding 模型（~79MB），避免运行时下载超时。
+# 该 S3 地址在部分受限网络下不可达；下载失败不阻断镜像构建：
+# compose 使用独立 ChromaDB 服务端时由服务端完成 embedding，只有本地嵌入式兜底模式才需要这份缓存。
+# 可用 --build-arg PRELOAD_ONNX=false 在受限网络中跳过预下载。
+ARG PRELOAD_ONNX=true
+ENV PRELOAD_ONNX=${PRELOAD_ONNX}
 RUN python - <<'PY'
+import os
 import pathlib
 import shutil
 import tarfile
 import urllib.request
 
-url = "https://chroma-onnx-models.s3.amazonaws.com/all-MiniLM-L6-v2/onnx.tar.gz"
 dest_dir = pathlib.Path("/root/.cache/chroma/onnx_models/all-MiniLM-L6-v2")
 dest_dir.mkdir(parents=True, exist_ok=True)
+
+if os.environ.get("PRELOAD_ONNX", "true").strip().lower() == "false":
+    print("skipping ONNX predownload (PRELOAD_ONNX=false)")
+    raise SystemExit(0)
+
+url = "https://chroma-onnx-models.s3.amazonaws.com/all-MiniLM-L6-v2/onnx.tar.gz"
 archive = dest_dir / "onnx.tar.gz"
 
-with urllib.request.urlopen(url, timeout=60) as response, open(archive, "wb") as target:
-    shutil.copyfileobj(response, target)
-
-with tarfile.open(archive, "r:gz") as tar:
-    tar.extractall(dest_dir)
-
-archive.unlink()
+for attempt in range(1, 3):
+    try:
+        with urllib.request.urlopen(url, timeout=20) as response, open(archive, "wb") as target:
+            shutil.copyfileobj(response, target)
+        with tarfile.open(archive, "r:gz") as tar:
+            tar.extractall(dest_dir)
+        archive.unlink()
+        print(f"downloaded ONNX embedding model on attempt {attempt}")
+        break
+    except Exception as exc:  # network, TLS or archive problems
+        print(f"warning: ONNX model download attempt {attempt} failed: {exc}")
+        archive.unlink(missing_ok=True)
+else:
+    print("warning: continuing without the ONNX cache; the server-side ChromaDB service does not need it")
 PY
 
 # ── 阶段 3：生产镜像 ──────────────────────────────────────────────────────────

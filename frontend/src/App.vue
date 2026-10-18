@@ -97,19 +97,57 @@
               <details v-for="(action, index) in developerLast.actions" :key="index" open>
                 <summary><strong>{{ action.tool }}</strong><span>{{ action.success ? '成功' : '失败' }}</span></summary>
                 <p>{{ action.summary }}</p><small>来源：{{ action.source }}</small>
+                <small v-if="action.tainted" class="action-tainted">疑似指令内容，已按数据处理</small>
               </details>
             </div>
             <p v-else class="side-empty">这里展示可验证的行动与观察摘要，不展示模型内部推理。</p>
           </section>
           <section class="workspace-card">
-            <div class="card-heading"><div><span class="kicker">Evidence</span><h2>证据引用</h2></div></div>
-            <div v-for="item in developerLast?.diagnosis?.hypotheses || []" :key="item.code" class="developer-goal">
-              <strong>{{ item.description }}</strong> · {{ item.status }}<br>依据：{{ item.evidence.join('、') }}
+            <div class="card-heading"><div><span class="kicker">Evidence</span><h2>证据引用</h2></div><strong v-if="developerLast?.diagnosis?.status" class="diagnosis-status">{{ diagnosisStatusLabel(developerLast.diagnosis.status) }}</strong></div>
+            <p v-if="developerLast?.diagnosis?.summary" class="diagnosis-summary">{{ developerLast.diagnosis.summary }}</p>
+            <div v-for="item in developerLast?.diagnosis?.hypotheses || []" :key="item.code" class="hypothesis">
+              <p class="hypothesis-head">
+                <strong>{{ item.description }}</strong>
+                <span :class="['hypothesis-status', `hypothesis-status-${item.status}`]">{{ hypothesisStatusLabel(item.status) }}</span>
+                <span v-if="item.confidence" class="hypothesis-confidence">置信度 {{ confidenceLabel(item.confidence) }}</span>
+              </p>
+              <p v-if="item.evidence?.length" class="hypothesis-line">依据：{{ item.evidence.join('、') }}</p>
+              <p v-if="item.contradicted_by?.length" class="hypothesis-line hypothesis-contradicted">反向证据：{{ item.contradicted_by.join('、') }}</p>
+              <p v-if="item.next_evidence" class="hypothesis-line">下一步证据：{{ item.next_evidence }}</p>
+              <p v-if="item.remediation" class="hypothesis-line">建议处理：{{ item.remediation }}</p>
+            </div>
+            <div v-if="developerLast?.diagnosis?.conflicts?.length" class="diagnosis-conflict">
+              <p class="section-label">证据冲突</p>
+              <div v-for="(conflict, index) in developerLast.diagnosis.conflicts" :key="`conflict-${index}`" class="conflict-item">
+                <p>{{ conflict.explanation }}</p>
+                <small v-if="conflict.sources?.length">{{ conflict.sources.join(' ↔ ') }}</small>
+              </div>
+            </div>
+            <div v-if="developerLast?.diagnosis?.linkages?.length" class="diagnosis-linkage">
+              <p class="section-label">关联分析</p>
+              <div v-for="(linkage, index) in developerLast.diagnosis.linkages" :key="`linkage-${index}`" class="linkage-item">
+                <p><strong>{{ linkageAssessmentLabel(linkage.assessment) }}</strong><template v-if="linkage.explanation"> · {{ linkage.explanation }}</template></p>
+                <small>投递 {{ linkage.delivery_id || '—' }} ↔ 关联请求 {{ linkage.related_request_id || '—' }}</small>
+              </div>
             </div>
             <ul v-if="developerLast?.evidence?.length" class="developer-evidence">
               <li v-for="(source, index) in developerLast.evidence" :key="`${source}-${index}`">{{ source }}</li>
             </ul>
             <p v-else class="side-empty">成功核验的文档和模拟记录会列在这里。</p>
+          </section>
+          <section v-if="developerLast?.security" class="workspace-card">
+            <div class="card-heading"><div><span class="kicker">Security</span><h2>安全边界</h2></div><strong v-if="developerLast.security.injection_suspected" class="security-mark">已标记</strong><strong v-else class="security-clear">正常</strong></div>
+            <p v-if="developerLast.security.injection_suspected" class="security-alert">检测到疑似指令内容：相关文本已按不可信数据处理，未作为指令执行。</p>
+            <p v-else class="side-empty">未发现疑似指令或越权诱导。</p>
+            <ul v-if="developerLast.security.flags?.length" class="security-flags">
+              <li v-for="(flag, index) in developerLast.security.flags" :key="`flag-${index}`">
+                <strong>{{ securityKindLabel(flag.kind) }}</strong>
+                <small>{{ flag.origin || '未知来源' }}<template v-if="flag.source"> · {{ flag.source }}</template></small>
+                <p v-if="flag.excerpt" class="security-excerpt">{{ flag.excerpt }}</p>
+              </li>
+            </ul>
+            <p v-if="developerLast.security.tainted_sources?.length" class="security-line">可疑来源：{{ developerLast.security.tainted_sources.join('、') }}</p>
+            <p v-if="developerLast.security.policy" class="security-line security-policy">策略：{{ developerLast.security.policy }}</p>
           </section>
           <section class="workspace-card">
             <div class="card-heading"><div><span class="kicker">Memory</span><h2>记忆使用</h2></div></div>
@@ -152,6 +190,27 @@ const retryRequest = ref(null)
 const developerHealthOk = ref(false)
 const developerDocsUrl = computed(() => `${backendMeta('python', settings).baseUrl}/docs`)
 let messageSequence = 0
+// 诊断结论字段可能由新旧后端版本返回，映射时保留未知值兜底。
+const HYPOTHESIS_STATUS_LABELS = { supported: '已支持', contradicted: '被证据否定', observed: '仅观察到' }
+const CONFIDENCE_LABELS = { high: '高', medium: '中', low: '低' }
+const DIAGNOSIS_STATUS_LABELS = { evidence_available: '证据可支持', conflicting_evidence: '证据冲突', insufficient_evidence: '证据不足' }
+const LINKAGE_ASSESSMENT_LABELS = {
+  related_request_succeeded: '关联请求已成功',
+  correlated_unproven: '有关联但未证实',
+  related_request_failed_other: '关联请求其他原因失败'
+}
+const SECURITY_KIND_LABELS = {
+  instruction_override: '指令覆盖',
+  system_prompt_leak: '系统提示泄露',
+  credential_exfiltration: '凭证外泄诱导',
+  authorization_bypass: '绕过授权',
+  role_injection: '角色注入'
+}
+function hypothesisStatusLabel(value) { return HYPOTHESIS_STATUS_LABELS[value] || value || '未知状态' }
+function confidenceLabel(value) { return CONFIDENCE_LABELS[value] || value || '未知' }
+function diagnosisStatusLabel(value) { return DIAGNOSIS_STATUS_LABELS[value] || value || '证据状态未知' }
+function linkageAssessmentLabel(value) { return LINKAGE_ASSESSMENT_LABELS[value] || value || '关联分析' }
+function securityKindLabel(value) { return SECURITY_KIND_LABELS[value] || value || '未知类型' }
 watch(() => settings.developerConversationId, () => saveSettings(settings))
 onMounted(async () => { try { developerHealthOk.value = (await requestHealth('python', settings)).status === 'ok' } catch { developerHealthOk.value = false } })
 async function signIn() {
@@ -210,3 +269,37 @@ async function sendDeveloperMessage(retry = null) {
   }
 }
 </script>
+<style scoped>
+.diagnosis-status { color: #92a1f5; font-size: 12px; font-weight: 600; }
+.diagnosis-summary { margin: 0 0 12px; color: #9aa7bb; font-size: 12px; line-height: 1.6; }
+.hypothesis { padding-bottom: 12px; margin-bottom: 12px; border-bottom: 1px solid rgba(141, 153, 170, 0.16); }
+.hypothesis:last-of-type { padding-bottom: 0; margin-bottom: 0; border-bottom: 0; }
+.hypothesis-head { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 8px; margin: 0 0 6px; line-height: 1.5; }
+.hypothesis-head strong { color: #e6ebf4; }
+.hypothesis-status { padding: 1px 7px; border-radius: 999px; border: 1px solid rgba(141, 153, 170, 0.35); color: #b8c5d7; font-size: 11px; white-space: nowrap; }
+.hypothesis-status-supported { border-color: rgba(65, 201, 140, 0.5); color: #7fe0b4; }
+.hypothesis-status-contradicted { border-color: rgba(240, 108, 108, 0.55); color: #ff9aa2; }
+.hypothesis-status-observed { border-color: rgba(246, 191, 80, 0.5); color: #f4cf82; }
+.hypothesis-confidence { color: #9aa7bb; font-size: 11px; }
+.hypothesis-line { margin: 0 0 4px; color: #b4bfd0; font-size: 12px; line-height: 1.55; word-break: break-word; }
+.hypothesis-contradicted { color: #ffb4ba; }
+.section-label { margin: 16px 0 8px; color: #93a3b8; font-size: 11px; letter-spacing: 0.08em; text-transform: uppercase; }
+.diagnosis-conflict { margin-top: 14px; padding: 10px 12px; border-left: 2px solid rgba(246, 191, 80, 0.7); border-radius: 0 10px 10px 0; background: rgba(246, 191, 80, 0.08); }
+.diagnosis-conflict .section-label { margin-top: 0; color: #f4cf82; }
+.conflict-item + .conflict-item, .linkage-item + .linkage-item { margin-top: 10px; }
+.conflict-item p, .linkage-item p { margin: 0 0 4px; color: #d5dce8; font-size: 12px; line-height: 1.6; }
+.conflict-item small, .linkage-item small { color: #9aa7bb; font-size: 11px; word-break: break-all; }
+.diagnosis-linkage { margin-top: 14px; padding-left: 12px; border-left: 2px solid rgba(141, 153, 170, 0.35); }
+.diagnosis-linkage .section-label { margin-top: 0; }
+.security-mark { color: #ffb4ba; font-size: 12px; font-weight: 600; }
+.security-clear { color: #7fe0b4; font-size: 12px; font-weight: 600; }
+.security-alert { margin: 0 0 10px; padding: 10px 12px; border-left: 2px solid rgba(240, 108, 108, 0.7); border-radius: 0 10px 10px 0; background: rgba(240, 108, 108, 0.08); color: #ffc4c9; font-size: 12px; line-height: 1.6; }
+.security-flags { list-style: none; margin: 0 0 10px; padding: 0; display: grid; gap: 8px; }
+.security-flags li { display: grid; gap: 3px; padding: 9px 11px; border: 1px solid rgba(141, 153, 170, 0.22); border-radius: 10px; }
+.security-flags strong { color: #ffb4ba; font-size: 12px; }
+.security-flags small { color: #9aa7bb; font-size: 11px; word-break: break-all; }
+.security-excerpt { margin: 0; color: #c9d2df; font-size: 11px; line-height: 1.5; word-break: break-all; }
+.security-line { margin: 0 0 6px; color: #b4bfd0; font-size: 12px; line-height: 1.6; word-break: break-word; }
+.security-policy { color: #9aa7bb; }
+.action-tainted { display: block; margin-top: 4px; color: #f4cf82; }
+</style>

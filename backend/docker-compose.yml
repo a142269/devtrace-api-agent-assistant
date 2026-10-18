@@ -6,6 +6,14 @@ services:
     environment:
       DEVELOPER_SANDBOX_DB: /app/data/developer_sandbox.sqlite
     volumes: ["sandbox-data:/app/data"]
+    healthcheck:
+      # The shared production image healthcheck targets port 8000; this service
+      # listens on 8100, so override it or the container is always "unhealthy".
+      test: ["CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://127.0.0.1:8100/health', timeout=3)\""]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
   redis:
     image: redis:7-alpine
     command: redis-server --appendonly yes --requirepass ${REDIS_PASSWORD:-change-me-for-local-development}

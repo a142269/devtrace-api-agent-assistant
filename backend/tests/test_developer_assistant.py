@@ -144,8 +144,6 @@ class DeveloperAssistantTests(unittest.IsolatedAsyncioTestCase):
                 result = await self.assistant.run(case["message"], "u-eval")
                 self.assertEqual(result["plan"]["status"], "complete")
                 expected = case['expected_tools']
-                if case['family'] == 'auth' and int(case['identifier'][-2:]) % 3 == 0:
-                    expected = [tool for tool in expected if tool != 'inspect_key_scope']
                 self.assertEqual([a["tool"] for a in result["actions"]], expected)
                 self.assertTrue(all(a["success"] for a in result["actions"]))
                 self.assertTrue(any(case["identifier"] in source for source in result["evidence"]))
@@ -177,8 +175,8 @@ class DeveloperAssistantTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual({item['code'] for item in result['diagnosis']['hypotheses']},
                          {'webhook_delivery_failed', 'minute_quota_exceeded'})
         self.assertTrue(result['ticket_id'].startswith('MOCK-'))
-        self.assertIn('Retry-After 6 秒', result['answer'])
         self.assertIn('不足以证明限流导致投递失败', result['answer'])
+        self.assertNotIn('Retry-After', result['answer'])
 
     async def test_combined_incident_variants_follow_their_own_links(self):
         for index in range(1, 11):
@@ -189,6 +187,11 @@ class DeveloperAssistantTests(unittest.IsolatedAsyncioTestCase):
                 self.assertTrue(related['success'])
                 self.assertEqual(result['plan']['status'], 'complete')
                 self.assertEqual(len(result['diagnosis']['hypotheses']), 2)
+                quota = next(h for h in result['diagnosis']['hypotheses']
+                             if h['code'] == 'minute_quota_exceeded')
+                self.assertEqual(quota['scope'], 'related_request')
+                self.assertEqual(quota['status'], 'observed')
+                self.assertNotIn('Retry-After', result['answer'])
 
     async def test_v2_request_is_verified_before_version_specific_docs(self):
         result = await self.assistant.run('请求 req_auth_v2_01 返回 401', 'u-v2')

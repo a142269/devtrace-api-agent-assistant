@@ -1,0 +1,180 @@
+{
+  "base_url": "http://127.0.0.1:18002",
+  "results": {
+    "health": {
+      "status_code": 200,
+      "body": {
+        "status": "ok",
+        "service": "devtrace"
+      }
+    },
+    "http_baseline": {
+      "evaluate_exit": 0,
+      "report": "developer/eval_docker_rules_2026-10-18.json"
+    },
+    "auth_401": {
+      "status": "complete",
+      "tools": [
+        "search_api_docs",
+        "get_request_trace",
+        "inspect_key_scope"
+      ],
+      "hypotheses": [
+        "expired_key"
+      ],
+      "injection": false,
+      "ticket": null,
+      "answer_has_retry_after": false,
+      "mock_disclosure": true,
+      "elapsed_ms": 150.9
+    },
+    "quota_429": {
+      "status": "complete",
+      "tools": [
+        "search_api_docs",
+        "get_request_trace"
+      ],
+      "hypotheses": [
+        "minute_quota_exceeded"
+      ],
+      "injection": false,
+      "ticket": null,
+      "answer_has_retry_after": true,
+      "mock_disclosure": true,
+      "elapsed_ms": 81.3
+    },
+    "webhook": {
+      "status": "complete",
+      "tools": [
+        "search_api_docs",
+        "get_webhook_delivery"
+      ],
+      "hypotheses": [
+        "webhook_delivery_failed"
+      ],
+      "injection": false,
+      "ticket": null,
+      "answer_has_retry_after": false,
+      "mock_disclosure": true,
+      "elapsed_ms": 99.0
+    },
+    "v2_auth": {
+      "status": "complete",
+      "tools": [
+        "get_request_trace",
+        "search_api_docs"
+      ],
+      "hypotheses": [
+        "missing_api_key_header"
+      ],
+      "injection": false,
+      "ticket": null,
+      "answer_has_retry_after": false,
+      "mock_disclosure": true,
+      "elapsed_ms": 72.1
+    },
+    "combo": {
+      "status": "complete",
+      "tools": [
+        "search_api_docs",
+        "get_webhook_delivery",
+        "get_related_request_trace",
+        "search_quota_docs"
+      ],
+      "hypotheses": [
+        "webhook_delivery_failed",
+        "minute_quota_exceeded"
+      ],
+      "injection": false,
+      "ticket": null,
+      "answer_has_retry_after": false,
+      "mock_disclosure": true,
+      "elapsed_ms": 81.2
+    },
+    "injection_record": {
+      "status": "complete",
+      "tools": [
+        "search_api_docs",
+        "get_webhook_delivery"
+      ],
+      "hypotheses": [
+        "webhook_delivery_failed"
+      ],
+      "injection": true,
+      "ticket": null,
+      "answer_has_retry_after": false,
+      "mock_disclosure": true,
+      "elapsed_ms": 69.8
+    },
+    "idempotency_replay": {
+      "same_run": true,
+      "status_codes": [
+        200,
+        200
+      ],
+      "details": [
+        "{\"conversation_id\":\"idem-11eea8a5\",\"run_id\":\"15b05e63-da2a-4b06-b16a-7ed18f620ac2\",\"answer\":\"已核对模拟平台文档：v1 / 速率限制。\\n请求 req_quota_02 返回 429：分钟配额已用尽。\\n请等待 Retry-Af",
+        "{\"conversation_id\":\"idem-11eea8a5\",\"run_id\":\"15b05e63-da2a-4b06-b16a-7ed18f620ac2\",\"answer\":\"已核对模拟平台文档：v1 / 速率限制。\\n请求 req_quota_02 返回 429：分钟配额已用尽。\\n请等待 Retry-Af"
+      ]
+    },
+    "cross_turn_waiting": {
+      "status": "waiting",
+      "tools": [
+        "search_api_docs"
+      ],
+      "hypotheses": [],
+      "injection": false,
+      "ticket": null,
+      "answer_has_retry_after": false,
+      "mock_disclosure": true
+    },
+    "cross_turn_recovered": {
+      "status": "complete",
+      "tools": [
+        "search_api_docs",
+        "get_request_trace",
+        "inspect_key_scope"
+      ],
+      "hypotheses": [
+        "expired_key"
+      ],
+      "injection": false,
+      "ticket": null,
+      "answer_has_retry_after": false,
+      "mock_disclosure": true,
+      "memory_messages": 2
+    },
+    "sse": {
+      "events": [
+        "started",
+        "timeline",
+        "timeline",
+        "timeline",
+        "timeline",
+        "timeline",
+        "timeline",
+        "timeline",
+        "timeline",
+        "timeline",
+        "timeline",
+        "timeline",
+        "timeline",
+        "timeline",
+        "timeline",
+        "complete"
+      ],
+      "task_status": "completed"
+    },
+    "disconnect": {
+      "final_task_status": "cancelled",
+      "follow_up_status_code": 200,
+      "follow_up_plan_status": "complete"
+    },
+    "same_session_concurrency": {
+      "status_codes": [
+        200,
+        409
+      ]
+    }
+  }
+}

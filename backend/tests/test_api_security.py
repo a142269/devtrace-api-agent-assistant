@@ -1,5 +1,7 @@
 import asyncio
 import json
+import os
+import time
 import unittest
 
 import httpx
@@ -24,7 +26,7 @@ class Lock:
 
 class Redis:
     def __init__(self):
-        self.values, self.held = {}, set()
+        self.values, self.held, self.sets = {}, set(), {}
 
     async def eval(self, *_args):
         return 1
@@ -37,6 +39,15 @@ class Redis:
 
     async def setex(self, key, _ttl, value):
         self.values[key] = value
+
+    async def sadd(self, key, value):
+        self.sets.setdefault(key, set()).add(value)
+
+    async def srem(self, key, value):
+        self.sets.get(key, set()).discard(value)
+
+    async def smembers(self, key):
+        return set(self.sets.get(key, set()))
 
 
 class Assistant:
@@ -123,3 +134,102 @@ class ApiSecurityTests(unittest.IsolatedAsyncioTestCase):
         own = await self.client.get(f'/developer/tasks/{task_id}', headers=self.headers())
         self.assertEqual(own.json()['status'], 'cancelled')
         self.assertEqual((await self.client.get(f'/developer/tasks/{task_id}', headers=self.headers('bob'))).status_code, 404)
+
+    async def test_cancelled_stream_task_records_cancelled_and_releases_lock(self):
+        # Approximates Starlette cancelling the response task on client disconnect:
+        # the generator receives CancelledError while the worker is still running.
+        stream = await main.developer_chat_stream(
+            main.DeveloperChatRequest(message='hello', conversation_id='c2'), 'alice', 'request-cancel')
+        iterator = stream.body_iterator
+        started = await anext(iterator)
+        task_id = json.loads(started.split('data: ', 1)[1])['task_id']
+
+        async def consume():
+            async for _ in iterator:
+                pass
+
+        consumer = asyncio.create_task(consume())
+        await asyncio.sleep(0.05)
+        consumer.cancel()
+        with self.assertRaises(asyncio.CancelledError):
+            await consumer
+        record = {}
+        for _ in range(100):
+            raw = self.assistant.redis.values.get(f'developer:task:{task_id}')
+            record = json.loads(raw) if raw else {}
+            if record.get('status') != 'running':
+                break
+            await asyncio.sleep(0.02)
+        self.assertEqual(record.get('status'), 'cancelled')
+        self.assertFalse(self.assistant.redis.held)
+
+    async def test_running_task_is_repaired_after_its_worker_disappears(self):
+        redis = self.assistant.redis
+        record = await main._write_task_record(redis, 't1', 'alice', 'running')
+        record['updated_at'] -= 3600
+        await redis.setex('developer:task:t1', 86400, json.dumps(record))
+        view = await main.developer_task('t1', 'alice')
+        self.assertEqual(view['status'], 'interrupted')
+        self.assertNotIn('user_id', view)
+        self.assertIn('reason', view)
+        self.assertNotIn('t1', redis.sets.get(main.TASK_INDEX_KEY, set()))
+        with self.assertRaises(Exception):
+            await main.developer_task('t1', 'bob')
+
+    async def test_live_running_task_and_finished_task_are_not_interrupted(self):
+        redis = self.assistant.redis
+        await main._write_task_record(redis, 't2', 'alice', 'running')
+        await main._write_task_record(redis, 't3', 'alice', 'completed')
+        self.assertEqual((await main.developer_task('t2', 'alice'))['status'], 'running')
+        self.assertEqual((await main.developer_task('t3', 'alice'))['status'], 'completed')
+
+    async def test_startup_reconcile_marks_only_leftover_running_tasks(self):
+        redis = self.assistant.redis
+        await main._write_task_record(redis, 't4', 'alice', 'running')
+        await main._write_task_record(redis, 't5', 'alice', 'waiting')
+        marked = await main.reconcile_stale_tasks(redis)
+        self.assertEqual(marked, 1)
+        self.assertEqual((await main.developer_task('t4', 'alice'))['status'], 'interrupted')
+        self.assertEqual((await main.developer_task('t5', 'alice'))['status'], 'waiting')
+
+    async def test_heartbeat_keeps_a_long_running_task_alive(self):
+        redis = self.assistant.redis
+        record = await main._write_task_record(redis, 't6', 'alice', 'running')
+        record['updated_at'] = time.time() - 1000
+        await redis.setex('developer:task:t6', 86400, json.dumps(record))
+        await main._touch_task(redis, 't6')
+        refreshed = json.loads(redis.values['developer:task:t6'])
+        self.assertLess(time.time() - refreshed['updated_at'], 5)
+        self.assertEqual(refreshed['status'], 'running')
+
+    async def test_stale_threshold_stays_above_the_run_and_lock_windows(self):
+        previous = os.environ.get('DEVTRACE_TASK_STALE_SECONDS')
+        try:
+            os.environ['DEVTRACE_TASK_STALE_SECONDS'] = '30'
+            self.assertGreaterEqual(main._stale_after_seconds(), 240)
+            os.environ['DEVTRACE_TASK_STALE_SECONDS'] = 'not-a-number'
+            self.assertGreaterEqual(main._stale_after_seconds(), 240)
+        finally:
+            if previous is None:
+                os.environ.pop('DEVTRACE_TASK_STALE_SECONDS', None)
+            else:
+                os.environ['DEVTRACE_TASK_STALE_SECONDS'] = previous
+
+    async def test_repair_does_not_overwrite_a_task_that_just_finished(self):
+        redis = self.assistant.redis
+        record = await main._write_task_record(redis, 't7', 'alice', 'running')
+        stale = dict(record)
+        stale['updated_at'] -= 3600
+        finished = dict(record)
+        finished['status'] = 'completed'
+        finished['updated_at'] = record['updated_at'] + 5
+        await redis.setex('developer:task:t7', 86400, json.dumps(finished))
+        view = await main._mark_interrupted(redis, 't7', stale)
+        self.assertEqual(view['status'], 'completed')
+
+    async def test_reconcile_degrades_when_the_index_is_not_supported(self):
+        class MinimalRedis:
+            async def get(self, key):
+                return None
+
+        self.assertEqual(await main.reconcile_stale_tasks(MinimalRedis()), 0)

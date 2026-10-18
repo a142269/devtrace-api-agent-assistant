@@ -2,7 +2,9 @@
 import asyncio
 import hashlib
 import json
+import logging
 import os
+import time
 from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Optional
@@ -25,7 +27,109 @@ from mcp.tool_manager import MCPToolManager
 from memory.conversation_memory import MemoryManager
 
 load_dotenv()
+logger = logging.getLogger(__name__)
 _developer = None
+TASK_TTL_SECONDS = 86400
+TASK_INDEX_KEY = 'developer:tasks:running'
+
+
+def _stale_after_seconds() -> float:
+    # The run timeout is 150s and the session lock is 180s; a shorter threshold
+    # would let a query mark a healthy long-running task as interrupted.
+    try:
+        return max(240.0, float(os.getenv('DEVTRACE_TASK_STALE_SECONDS', '240')))
+    except ValueError:
+        return 240.0
+
+
+def _task_key(task_id: str) -> str:
+    return f'developer:task:{task_id}'
+
+
+async def _write_task_record(redis, task_id: str, user_id: str, status: str, run_id=None) -> dict:
+    record = {'task_id': task_id, 'user_id': user_id, 'status': status, 'run_id': run_id,
+              'updated_at': time.time()}
+    await redis.setex(_task_key(task_id), TASK_TTL_SECONDS, json.dumps(record))
+    # The index lets a restarted process find the tasks an earlier process left behind.
+    if status == 'running':
+        await redis.sadd(TASK_INDEX_KEY, task_id)
+    else:
+        await redis.srem(TASK_INDEX_KEY, task_id)
+    return record
+
+
+async def _touch_task(redis, task_id: str) -> None:
+    """Refresh the heartbeat of a task that is still executing."""
+    raw = await redis.get(_task_key(task_id))
+    if not raw:
+        return
+    try:
+        record = json.loads(raw)
+    except (TypeError, ValueError):
+        return
+    if record.get('status') != 'running':
+        return
+    record['updated_at'] = time.time()
+    await redis.setex(_task_key(task_id), TASK_TTL_SECONDS, json.dumps(record))
+
+
+def task_is_stale(record: dict, now: Optional[float] = None) -> bool:
+    if record.get('status') != 'running':
+        return False
+    updated = record.get('updated_at')
+    if not isinstance(updated, (int, float)):
+        return True
+    return (time.time() if now is None else now) - updated > _stale_after_seconds()
+
+
+async def _mark_interrupted(redis, task_id: str, record: dict) -> dict:
+    # Re-read before writing so a concurrently finishing worker is not overwritten
+    # with an interrupted status. Best effort: Redis still offers no transaction
+    # across the read and the write, but the window is now tiny.
+    raw = await redis.get(_task_key(task_id))
+    try:
+        current = json.loads(raw) if raw else None
+    except (TypeError, ValueError):
+        current = None
+    if (not isinstance(current, dict) or current.get('status') != 'running'
+            or current.get('updated_at') != record.get('updated_at')):
+        return current or record
+    current['status'] = 'interrupted'
+    current['interrupted_at'] = time.time()
+    current['reason'] = '执行进程没有按时更新心跳；任务已标记为中断，可用同一会话发送“继续”重试'
+    await redis.setex(_task_key(task_id), TASK_TTL_SECONDS, json.dumps(current))
+    await redis.srem(TASK_INDEX_KEY, task_id)
+    return current
+
+
+async def reconcile_stale_tasks(redis) -> int:
+    """Repair tasks a previous process left in `running` (called once at startup).
+
+    Only safe for a single application process sharing this Redis. With multiple
+    replicas, startup repair must scope the index to its own worker id instead.
+    """
+    members = getattr(redis, 'smembers', None)
+    if members is None:
+        return 0
+    marked = 0
+    for task_id in await members(TASK_INDEX_KEY):
+        if isinstance(task_id, bytes):
+            task_id = task_id.decode('utf-8')
+        raw = await redis.get(_task_key(task_id))
+        if not raw:
+            await redis.srem(TASK_INDEX_KEY, task_id)
+            continue
+        try:
+            record = json.loads(raw)
+        except (TypeError, ValueError):
+            await redis.srem(TASK_INDEX_KEY, task_id)
+            continue
+        if record.get('status') == 'running':
+            await _mark_interrupted(redis, task_id, record)
+            marked += 1
+        else:
+            await redis.srem(TASK_INDEX_KEY, task_id)
+    return marked
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -61,6 +165,12 @@ async def lifespan(app: FastAPI):
         tool_manager=MCPToolManager(api_key=key, base_url=base_url, model=model_name),
         sandbox_url=os.getenv("DEVELOPER_SANDBOX_URL", "http://developer-sandbox:8100"),
     )
+    try:
+        interrupted = await reconcile_stale_tasks(_developer.redis)
+        if interrupted:
+            logger.warning('启动时把 %s 个残留 running 任务标记为 interrupted', interrupted)
+    except Exception:
+        logger.warning('启动时任务状态修复失败', exc_info=True)
     try:
         yield
     finally:
@@ -146,10 +256,14 @@ async def developer_chat(req: DeveloperChatRequest, user_id: str = Depends(curre
             await _developer.redis.setex(idem_key, 86400, json.dumps({'payload_hash': payload_hash, 'response': result}, ensure_ascii=False))
         return result
     finally:
+        # A disconnected SSE client cancels this task; shield the release so the
+        # session lock is not leaked for the full 180s TTL.
         for lock in reversed(locks):
             try:
-                await lock.release()
+                await asyncio.shield(lock.release())
             except LockError:
+                pass
+            except BaseException:
                 pass
 
 @app.get('/developer/runs', tags=['开发者助手'])
@@ -195,6 +309,9 @@ async def developer_task(task_id: str, user_id: str = Depends(current_user)):
     record = json.loads(raw) if raw else None
     if not record or record.get('user_id') != user_id:
         raise HTTPException(404, '任务不存在或已过期')
+    # Query-time repair: a task whose worker stopped cannot stay `running` forever.
+    if task_is_stale(record):
+        record = await _mark_interrupted(_developer.redis, task_id, record)
     return {key: value for key, value in record.items() if key != 'user_id'}
 
 
@@ -210,8 +327,7 @@ async def developer_chat_stream(req: DeveloperChatRequest, user_id: str = Depend
         queue: asyncio.Queue = asyncio.Queue()
 
         async def record_task(status, run_id=None):
-            record = {'task_id': task_id, 'user_id': user_id, 'status': status, 'run_id': run_id}
-            await _developer.redis.setex(f'developer:task:{task_id}', 86400, json.dumps(record))
+            await _write_task_record(_developer.redis, task_id, user_id, status, run_id)
 
         async def execute():
             nonlocal terminal
@@ -221,17 +337,31 @@ async def developer_chat_stream(req: DeveloperChatRequest, user_id: str = Depend
                 await record_task('waiting' if result.get('plan', {}).get('status') == 'waiting' else 'completed', result.get('run_id'))
                 terminal = True
                 await queue.put(('complete', result))
+            except asyncio.CancelledError:
+                # Client disconnect cancels the worker task; writing the status
+                # through shield keeps the record from staying `running`.
+                try:
+                    await asyncio.shield(record_task('cancelled'))
+                except BaseException:
+                    pass
+                terminal = True
+                raise
             except HTTPException as exc:
+                logger.warning('流式诊断请求失败: %s %s', exc.status_code, exc.detail)
                 await record_task('failed')
                 terminal = True
                 await queue.put(('error', {'status': exc.status_code, 'detail': exc.detail}))
             except Exception:
+                logger.exception('流式诊断执行异常')
                 await record_task('failed')
                 terminal = True
                 await queue.put(('error', {'status': 500, 'detail': '诊断执行失败，请稍后重试'}))
             finally:
                 event_sink.reset(reset_token)
-                await queue.put(('end', {}))
+                try:
+                    await queue.put(('end', {}))
+                except BaseException:
+                    pass
 
         await record_task('running')
         task = asyncio.create_task(execute())
@@ -241,16 +371,29 @@ async def developer_chat_stream(req: DeveloperChatRequest, user_id: str = Depend
                 try:
                     kind, data = await asyncio.wait_for(queue.get(), timeout=15)
                 except asyncio.TimeoutError:
+                    await _touch_task(_developer.redis, task_id)
                     yield ': heartbeat\n\n'
                     continue
                 if kind == 'end':
                     break
+                # Every emitted event is activity too, so refresh the heartbeat here
+                # as well as on the idle 15s tick.
+                await _touch_task(_developer.redis, task_id)
                 yield f'event: {kind}\ndata: {json.dumps(data, ensure_ascii=False)}\n\n'
         finally:
-            if not task.done():
-                task.cancel()
-            await asyncio.gather(task, return_exceptions=True)
-            if not terminal:
-                await record_task('cancelled')
+            async def settle():
+                if not task.done():
+                    task.cancel()
+                await asyncio.gather(task, return_exceptions=True)
+                if not terminal:
+                    await record_task('cancelled')
+
+            # Starlette cancels the response task when the client disconnects, so the
+            # cleanup must run in its own shielded task or the status stays `running`.
+            cleanup = asyncio.ensure_future(settle())
+            try:
+                await asyncio.shield(cleanup)
+            except BaseException:
+                pass
     return StreamingResponse(stream(), media_type='text/event-stream',
                              headers={'Cache-Control': 'no-cache', 'X-Accel-Buffering': 'no'})

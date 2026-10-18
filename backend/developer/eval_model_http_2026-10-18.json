@@ -1,0 +1,94 @@
+{
+  "base_url": "http://127.0.0.1:18002",
+  "mode": "model",
+  "results": {
+    "auth_401": {
+      "http_status": 200,
+      "decision_mode": "model",
+      "plan_status": "complete",
+      "tools": [
+        "search_api_docs",
+        "get_request_trace",
+        "inspect_key_scope"
+      ],
+      "hypotheses": [
+        "expired_key"
+      ],
+      "answer_has_retry_after": false,
+      "model_metrics": {
+        "calls": 4,
+        "errors": 0,
+        "latency_ms": 3063.6,
+        "input_tokens": 3154,
+        "output_tokens": 157
+      },
+      "client_elapsed_ms": 4192.9
+    },
+    "quota_429": {
+      "http_status": 200,
+      "decision_mode": "model",
+      "plan_status": "complete",
+      "tools": [
+        "search_api_docs",
+        "get_request_trace"
+      ],
+      "hypotheses": [
+        "minute_quota_exceeded"
+      ],
+      "answer_has_retry_after": true,
+      "model_metrics": {
+        "calls": 3,
+        "errors": 0,
+        "latency_ms": 2307.9,
+        "input_tokens": 1721,
+        "output_tokens": 140
+      },
+      "client_elapsed_ms": 3218.5
+    },
+    "webhook": {
+      "http_status": 200,
+      "decision_mode": "model",
+      "plan_status": "complete",
+      "tools": [
+        "get_webhook_delivery",
+        "search_api_docs"
+      ],
+      "hypotheses": [
+        "webhook_delivery_failed"
+      ],
+      "answer_has_retry_after": false,
+      "model_metrics": {
+        "calls": 3,
+        "errors": 0,
+        "latency_ms": 2344.3,
+        "input_tokens": 1832,
+        "output_tokens": 135
+      },
+      "client_elapsed_ms": 3615.7
+    },
+    "combo": {
+      "http_status": 200,
+      "decision_mode": "model",
+      "plan_status": "complete",
+      "tools": [
+        "search_api_docs",
+        "get_webhook_delivery",
+        "get_related_request_trace",
+        "search_quota_docs"
+      ],
+      "hypotheses": [
+        "webhook_delivery_failed",
+        "minute_quota_exceeded"
+      ],
+      "answer_has_retry_after": false,
+      "model_metrics": {
+        "calls": 5,
+        "errors": 0,
+        "latency_ms": 4102.3,
+        "input_tokens": 4944,
+        "output_tokens": 223
+      },
+      "client_elapsed_ms": 5717.0
+    }
+  }
+}
