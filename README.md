@@ -32,6 +32,8 @@ FastAPI plan executor
    └── FastAPI mock developer platform + SQLite tickets
 ```
 
+十个核心模块（LLM、记忆、规划、工具、执行、观察、状态调度、提示词、安全、输出）的逐项对照、实现位置和差距见 [智能体核心模块说明](backend/developer/智能体核心模块说明.md)。
+
 ### 项目结构
 
 ```text
