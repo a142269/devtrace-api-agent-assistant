@@ -23,7 +23,8 @@ model_metrics = contextvars.ContextVar('developer_model_metrics', default=None)
 
 from developer.error_playbooks import lookup_playbook
 from developer.planner import (KIND_TO_TOOLS, PUBLIC_API_MCP_TOOLS, TOOL_EVIDENCE, TOOL_SCHEMAS,
-                               TOOL_TITLES, _approved_tools, _ready_steps)
+                               TOOL_TITLES, _approved_tools, _ready_steps,
+                               build_plan_candidates, choose_plan_candidate)
 from developer.public_docs import detect_public_api
 from developer.prompts import PROMPT_VERSION, render
 from developer.security import scan_observation, scan_untrusted, tainted_sources
@@ -355,12 +356,13 @@ class DeveloperAssistant:
     def __init__(self, *, memory: Any, knowledge: Any, redis_client: Any, model: Any,
                  tool_manager: MCPToolManager, sandbox_url: str, dynamic_scope: bool = True,
                  public_knowledge: Any = None, mcp_client: Any = None,
-                 mcp_public_tools: bool = False):
+                 mcp_public_tools: bool = False, planning_candidates: bool = False):
         self.memory = memory
         self.knowledge = knowledge
         self.public_knowledge = public_knowledge
         self.mcp_client = mcp_client
         self.mcp_public_tools = bool(mcp_public_tools and mcp_client is not None)
+        self.planning_candidates = bool(planning_candidates)
         self.redis = redis_client
         self.model = model
         self.tools = tool_manager
@@ -509,9 +511,19 @@ class DeveloperAssistant:
                 adjustments.append('先核验请求记录中的 API 版本，再检索对应文档')
             if plan.get("kind") != kind:
                 adjustments.append("根据用户提供的问题标识修正故障类型")
+            plan_candidates = []
+            if self.planning_candidates:
+                plan_candidates = build_plan_candidates(
+                    kind, chosen, allowed_override, issue_id,
+                    require_version=issue_id.startswith('req_auth_v2_'))
+                selected = choose_plan_candidate(plan_candidates)
+                if selected != chosen:
+                    adjustments.append("候选计划评分：选择 " + " → ".join(selected))
+                chosen = selected
             state = {
                 "kind": kind, "goal": str(plan.get("goal") or f"排查 {kind} 接入问题")[:160],
                 "proposed_tools": proposed, "approved_tools": chosen,
+                "plan_candidates": plan_candidates,
                 "plan_adjustments": adjustments,
                 "issue_id": issue_id, "key_prefix": "", "api_version": "v1",
                 "require_version_observation": issue_id.startswith('req_auth_v2_'), "status": "running",
@@ -755,6 +767,7 @@ class DeveloperAssistant:
                                         "steps": state["steps"], "replans": state["replans"],
                                         "proposed_tools": state.get("proposed_tools", []),
                                         "approved_tools": state.get("approved_tools", []),
+                                        "candidates": state.get("plan_candidates", []),
                                         "adjustments": state.get("plan_adjustments", [])},
             "actions": state["actions"], "evidence": state["evidence"],
             "timeline": state["timeline"],

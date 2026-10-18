@@ -1,0 +1,126 @@
+{
+  "mode": "rules-in-process",
+  "count": 11,
+  "passed": 11,
+  "cases": [
+    {
+      "id": "auth_01",
+      "passed": true,
+      "reasons": [],
+      "approved": [
+        "get_request_trace",
+        "inspect_key_scope",
+        "search_api_docs"
+      ],
+      "score": 4.7
+    },
+    {
+      "id": "auth_02",
+      "passed": true,
+      "reasons": [],
+      "approved": [
+        "get_request_trace",
+        "inspect_key_scope",
+        "search_api_docs"
+      ],
+      "score": 4.7
+    },
+    {
+      "id": "auth_11",
+      "passed": true,
+      "reasons": [],
+      "approved": [
+        "get_request_trace",
+        "inspect_key_scope",
+        "search_api_docs"
+      ],
+      "score": 4.7
+    },
+    {
+      "id": "auth_v2",
+      "passed": true,
+      "reasons": [],
+      "approved": [
+        "get_request_trace",
+        "search_api_docs",
+        "inspect_key_scope"
+      ],
+      "score": 6.7
+    },
+    {
+      "id": "quota_01",
+      "passed": true,
+      "reasons": [],
+      "approved": [
+        "get_request_trace",
+        "search_api_docs"
+      ],
+      "score": 4.8
+    },
+    {
+      "id": "quota_02",
+      "passed": true,
+      "reasons": [],
+      "approved": [
+        "get_request_trace",
+        "search_api_docs"
+      ],
+      "score": 4.8
+    },
+    {
+      "id": "webhook_01",
+      "passed": true,
+      "reasons": [],
+      "approved": [
+        "get_webhook_delivery",
+        "search_api_docs"
+      ],
+      "score": 4.8
+    },
+    {
+      "id": "webhook_02",
+      "passed": true,
+      "reasons": [],
+      "approved": [
+        "get_webhook_delivery",
+        "search_api_docs"
+      ],
+      "score": 4.8
+    },
+    {
+      "id": "combo_01",
+      "passed": true,
+      "reasons": [],
+      "approved": [
+        "get_webhook_delivery",
+        "search_api_docs",
+        "get_related_request_trace",
+        "search_quota_docs"
+      ],
+      "score": 4.8
+    },
+    {
+      "id": "combo_02",
+      "passed": true,
+      "reasons": [],
+      "approved": [
+        "get_webhook_delivery",
+        "search_api_docs",
+        "get_related_request_trace",
+        "search_quota_docs"
+      ],
+      "score": 4.8
+    },
+    {
+      "id": "inject_01",
+      "passed": true,
+      "reasons": [],
+      "approved": [
+        "get_webhook_delivery",
+        "search_api_docs"
+      ],
+      "score": 4.8
+    }
+  ],
+  "limitations": "Rules mode; 12 hand-written cases; scoring is heuristic (coverage, record-before-docs, dependency, length) and does not optimize latency or model preference."
+}

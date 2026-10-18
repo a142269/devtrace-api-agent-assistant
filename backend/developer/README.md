@@ -43,7 +43,7 @@
 
 ## 验证
 
-`python -m unittest discover -s tests` 覆盖 104 项测试：30 条固定案例、跨轮恢复、错误标识后调整、工单去重、用户隔离与敏感信息脱敏，以及证据冲突、关联请求排除、工具记录/用户消息中的提示注入和任务心跳修复。实测结果见 [evaluation_report.md](evaluation_report.md)；模型在线演示需要有效的模型 API Key。
+`python -m unittest discover -s tests` 覆盖 107 项测试：30 条固定案例、跨轮恢复、错误标识后调整、工单去重、用户隔离与敏感信息脱敏，以及证据冲突、关联请求排除、工具记录/用户消息中的提示注入和任务心跳修复。实测结果见 [evaluation_report.md](evaluation_report.md)；模型在线演示需要有效的模型 API Key。
 
 登录取得短期 token 后，写入当前进程环境变量 `DEVTRACE_EVAL_TOKEN`，再运行 HTTP 判定器；不要把 token 写入仓库或命令历史：
 
@@ -85,6 +85,8 @@ python -m developer.evaluate_memory --output developer/eval_memory.json
 MCP 协议：`mcp/server.py` 提供 JSON-RPC 2.0 的 `initialize/tools/list/tools/call` 与 stdio 入口，`mcp/client.py` 提供进程内/stdio 传输；设置 `DEVTRACE_MCP_PUBLIC_TOOLS=enabled` 后 `public_api` 路径改用 `mcp_lookup_error_playbook`/`mcp_search_public_docs`。`python -m developer.evaluate_mcp` 对 10 条 MCP 路径问题做回归（2026-10-18 为 10/10）。
 
 记忆管理：`GET /developer/memory/{conversation_id}` 导出工作记忆/摘要/画像，`DELETE` 清理工作记忆/摘要/情景/计划检查点（画像保留）；`python -m developer.evaluate_memory_quality` 用确定性摘要器检查压缩保留/隔离/遗忘管线（2026-10-18 通过），不代表真实模型摘要质量。
+
+候选计划评分：`python -m developer.evaluate_planning_candidates` 检查 approved/evidence_first/minimal 三候选打分与选择（2026-10-18 为 11/11）；`DEVTRACE_PLANNING_CANDIDATES=enabled` 时启用，响应 `plan.candidates` 暴露候选与分数。
 
 `evaluate_holdout` 使用 19 条手写标签的独立 holdout 集（`eval_holdout_cases.json` 与专用夹具），规则模式在进程内运行；模型模式需额外传 `--mode model --base-url <地址>` 并设置 `DEVTRACE_EVAL_TOKEN`。2026-10-18 规则与模型均为 19/19，但样本小、标签由作者手写，不等同于第三方隐藏评测。`evaluate_memory_tasks` 用 12 条两轮任务比较同会话恢复与新会话重开（规则模式、stub 工作记忆），衡量跨轮任务成功与重复检索，不代表 ChromaDB 情景记忆或生产延迟。
 

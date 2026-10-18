@@ -50,6 +50,7 @@ services:
       DEVELOPER_MODEL_MODE: ${DEVELOPER_MODEL_MODE:-anthropic}
       DEVTRACE_TASK_QUEUE: enabled
       DEVTRACE_MCP_PUBLIC_TOOLS: enabled
+      DEVTRACE_PLANNING_CANDIDATES: enabled
     depends_on:
       redis: {condition: service_healthy}
       chromadb: {condition: service_healthy}
@@ -70,6 +71,7 @@ services:
       DEVELOPER_MODEL_MODE: ${DEVELOPER_MODEL_MODE:-anthropic}
       DEVTRACE_TASK_QUEUE: enabled
       DEVTRACE_MCP_PUBLIC_TOOLS: enabled
+      DEVTRACE_PLANNING_CANDIDATES: enabled
     depends_on:
       redis: {condition: service_healthy}
       chromadb: {condition: service_healthy}

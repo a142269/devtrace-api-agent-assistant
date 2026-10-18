@@ -127,3 +127,71 @@ def _ready_steps(state: Dict[str, Any]) -> list[Dict[str, Any]]:
     return ready
 
 
+# Candidate planning (optional): score a couple of safe orderings and pick one.
+_PLAN_RANK = {
+    "get_request_trace": 0, "get_webhook_delivery": 0, "get_related_request_trace": 1,
+    "search_quota_docs": 2, "inspect_key_scope": 2, "search_api_docs": 3,
+    "search_public_docs": 3, "lookup_error_playbook": 3, "mcp_search_public_docs": 3,
+    "mcp_lookup_error_playbook": 3, "create_support_ticket": 9,
+}
+
+
+def _dependency_ok(tools: list[str]) -> bool:
+    for tool, dependencies in TOOL_DEPENDENCIES.items():
+        if tool not in tools:
+            continue
+        for dependency in dependencies:
+            if dependency in tools and tools.index(dependency) > tools.index(tool):
+                return False
+    return True
+
+
+def _score_candidate(tools: list[str], allowed: list[str], issue_id: str) -> float:
+    coverage = len(set(tools) & set(allowed)) / max(1, len(allowed))
+    score = coverage * 4.0
+    docs = {"search_api_docs", "search_public_docs", "search_quota_docs",
+            "lookup_error_playbook", "mcp_search_public_docs", "mcp_lookup_error_playbook"}
+    records = {"get_request_trace", "get_webhook_delivery", "get_related_request_trace"}
+    if issue_id and any(tool in docs for tool in tools):
+        first_record = min((tools.index(tool) for tool in tools if tool in records), default=len(tools))
+        first_doc = min((tools.index(tool) for tool in tools if tool in docs), default=len(tools))
+        score += 2.0 if first_record < first_doc else 0.0
+    if _dependency_ok(tools):
+        score += 1.0
+    score -= 0.1 * len(tools)
+    return round(score, 2)
+
+
+def build_plan_candidates(kind: str, chosen: list[str], allowed: list[str] | None = None,
+                          issue_id: str = "", require_version: bool = False) -> list[dict]:
+    """Return safe candidate orderings with scores; never invent tools."""
+    allowed = allowed or KIND_TO_TOOLS[kind]
+    base = [tool for tool in chosen if tool in allowed]
+    if not base:
+        base = list(allowed)
+    candidates = [{"name": "approved", "tools": base,
+                   "score": _score_candidate(base, allowed, issue_id)}]
+    evidence_first = sorted(base, key=lambda tool: (_PLAN_RANK.get(tool, 5),
+                                                    base.index(tool)))
+    if evidence_first != base:
+        candidates.append({"name": "evidence_first", "tools": evidence_first,
+                           "score": _score_candidate(evidence_first, allowed, issue_id)})
+    minimal = [tool for tool in allowed if tool != "inspect_key_scope"]
+    candidates.append({"name": "minimal", "tools": minimal,
+                       "score": _score_candidate(minimal, allowed, issue_id)})
+    if require_version:
+        candidates = [candidate for candidate in candidates
+                      if candidate["name"] != "minimal" or "get_request_trace" in candidate["tools"]]
+    return candidates
+
+
+def choose_plan_candidate(candidates: list[dict]) -> list[str]:
+    """Highest score wins; ties keep the first (approved) candidate for stability."""
+    best = max(candidates, key=lambda item: (item["score"], -candidate_index(candidates, item)))
+    return list(best["tools"])
+
+
+def candidate_index(candidates: list[dict], item: dict) -> int:
+    return candidates.index(item)
+
+

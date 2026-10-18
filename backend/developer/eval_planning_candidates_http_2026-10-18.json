@@ -1,0 +1,18 @@
+{
+  "decision_mode": "model",
+  "plan_status": "complete",
+  "candidate_count": 3,
+  "candidate_names": [
+    "approved",
+    "evidence_first",
+    "minimal"
+  ],
+  "approved_tools": [
+    "get_request_trace",
+    "inspect_key_scope",
+    "search_api_docs"
+  ],
+  "records_before_docs": true,
+  "selected_highest": true,
+  "passed": true
+}

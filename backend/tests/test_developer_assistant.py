@@ -188,6 +188,38 @@ class DeveloperAssistantTests(unittest.IsolatedAsyncioTestCase):
         sandbox.DB_PATH = self.original_db
         self.temp.cleanup()
 
+    def test_plan_candidates_prefer_records_before_docs(self):
+        from developer.planner import build_plan_candidates, choose_plan_candidate
+
+        candidates = build_plan_candidates(
+            'auth', ['search_api_docs', 'get_request_trace', 'inspect_key_scope'],
+            issue_id='req_auth_01')
+        selected = choose_plan_candidate(candidates)
+        self.assertEqual(selected[0], 'get_request_trace')
+        self.assertLess(selected.index('get_request_trace'), selected.index('search_api_docs'))
+        self.assertGreaterEqual(len(candidates), 2)
+        self.assertTrue(all(set(item['tools']).issubset(
+            {'search_api_docs', 'get_request_trace', 'inspect_key_scope'}) for item in candidates))
+
+    async def test_planning_candidates_flag_selects_and_reports_candidates(self):
+        assistant = DeveloperAssistant(
+            memory=self.memory, knowledge=FakeKnowledge(), redis_client=self.redis,
+            model=RuleDecisionModel(), tool_manager=MCPToolManager(api_key='test-key'),
+            sandbox_url='http://sandbox', planning_candidates=True)
+        with patch("developer.assistant.httpx.AsyncClient", SandboxClient):
+            result = await assistant.run("请求 req_auth_01 返回 401", "u1")
+        self.assertEqual(result["plan"]["status"], "complete")
+        self.assertGreaterEqual(len(result["plan"]["candidates"]), 2)
+        self.assertEqual(result["plan"]["approved_tools"][0], "get_request_trace")
+        self.assertEqual(result["plan"]["approved_tools"],
+                         result["plan"]["candidates"][
+                             max(range(len(result["plan"]["candidates"])),
+                                 key=lambda index: result["plan"]["candidates"][index]["score"])]["tools"])
+
+    async def test_planning_candidates_are_absent_by_default(self):
+        result = await self.assistant.run("请求 req_auth_01 返回 401", "u1")
+        self.assertEqual(result["plan"]["candidates"], [])
+
     async def test_all_thirty_cases_reach_expected_evidence(self):
         self.assertEqual(len(EVAL_CASES), 30)
         for case in EVAL_CASES:

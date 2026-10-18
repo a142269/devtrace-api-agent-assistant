@@ -212,6 +212,8 @@ async def lifespan(app: FastAPI):
     mcp_client = None
     mcp_enabled = os.getenv('DEVTRACE_MCP_PUBLIC_TOOLS', '').strip().lower() in {
         '1', 'true', 'yes', 'enabled'}
+    planning_candidates = os.getenv('DEVTRACE_PLANNING_CANDIDATES', '').strip().lower() in {
+        '1', 'true', 'yes', 'enabled'}
     if mcp_enabled:
         from mcp.client import InProcessTransport, MCPClient
         from mcp.server import build_default_server
@@ -225,6 +227,7 @@ async def lifespan(app: FastAPI):
         sandbox_url=os.getenv("DEVELOPER_SANDBOX_URL", "http://developer-sandbox:8100"),
         public_knowledge=PublicDocsKnowledge(),
         mcp_client=mcp_client, mcp_public_tools=mcp_enabled,
+        planning_candidates=planning_candidates,
     )
     heartbeat = None
     try:
