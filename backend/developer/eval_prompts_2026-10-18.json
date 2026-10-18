@@ -1,0 +1,94 @@
+{
+  "version": "2026-10-18.1",
+  "snapshot_version": "2026-10-18.1",
+  "hashes": {
+    "system": "3c68a207f15519e6c6bf1bddf4999e7e7b255f12e0c3d3fedc92c8e130c0d1d6",
+    "plan": "47146d4ec15579052ca9f3ccec9a01025a3980f427e74a9284cca322ab5f313f",
+    "action": "1862bd7473dae508b7b1e61b66a47edada2a605dc8d3723b9679d1e5333e7e96",
+    "native_action": "8d9fd13415e3006f1fc1f00cdeff5412f6aad6cbc030d99db9d2d48c1d3ba4b2",
+    "revise": "18b7e284264d19ed5492fade77251ca91b7bf4b2c5ccd46f9d2bbce27c94abe2"
+  },
+  "checks": [
+    {
+      "name": "system",
+      "rendered": true,
+      "chars": 103,
+      "snapshot_match": true,
+      "contracts": {
+        "不可信数据": true,
+        "批准的计划": true,
+        "只输出 JSON": true
+      }
+    },
+    {
+      "name": "plan",
+      "rendered": true,
+      "chars": 505,
+      "snapshot_match": true,
+      "contracts": {
+        "kind=": true,
+        "public_api": true,
+        "不要等待 request_id": true,
+        "kind\":...": true
+      }
+    },
+    {
+      "name": "action",
+      "rendered": true,
+      "chars": 181,
+      "snapshot_match": true,
+      "contracts": {
+        "ready_steps": true,
+        "step_id": true,
+        "不要伪造标识符": true
+      }
+    },
+    {
+      "name": "native_action",
+      "rendered": true,
+      "chars": 119,
+      "snapshot_match": true,
+      "contracts": {
+        "只能使用提供的工具": true,
+        "未就绪步骤": true
+      }
+    },
+    {
+      "name": "revise",
+      "rendered": true,
+      "chars": 104,
+      "snapshot_match": true,
+      "contracts": {
+        "不能重复": true,
+        "ask_user": true
+      }
+    }
+  ],
+  "passed": true,
+  "required_contracts": {
+    "system": [
+      "不可信数据",
+      "批准的计划",
+      "只输出 JSON"
+    ],
+    "plan": [
+      "kind=",
+      "public_api",
+      "不要等待 request_id",
+      "kind\":..."
+    ],
+    "action": [
+      "ready_steps",
+      "step_id",
+      "不要伪造标识符"
+    ],
+    "native_action": [
+      "只能使用提供的工具",
+      "未就绪步骤"
+    ],
+    "revise": [
+      "不能重复",
+      "ask_user"
+    ]
+  }
+}

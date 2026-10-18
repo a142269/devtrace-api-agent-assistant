@@ -150,6 +150,12 @@ class DeveloperAssistantTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(schema['type'], 'object')
             self.assertIn('properties', schema)
 
+    async def test_response_exposes_prompt_version(self):
+        from developer.prompts import PROMPT_VERSION
+
+        result = await self.assistant.run("请求 req_auth_01 返回 401", "u1")
+        self.assertEqual(result["prompt_version"], PROMPT_VERSION)
+
     async def test_episodic_search_uses_chroma_supported_filter(self):
         memory = object.__new__(MemoryManager)
         seen = []

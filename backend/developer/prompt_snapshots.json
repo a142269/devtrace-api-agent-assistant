@@ -1,0 +1,10 @@
+{
+  "version": "2026-10-18.1",
+  "hashes": {
+    "system": "3c68a207f15519e6c6bf1bddf4999e7e7b255f12e0c3d3fedc92c8e130c0d1d6",
+    "plan": "47146d4ec15579052ca9f3ccec9a01025a3980f427e74a9284cca322ab5f313f",
+    "action": "1862bd7473dae508b7b1e61b66a47edada2a605dc8d3723b9679d1e5333e7e96",
+    "native_action": "8d9fd13415e3006f1fc1f00cdeff5412f6aad6cbc030d99db9d2d48c1d3ba4b2",
+    "revise": "18b7e284264d19ed5492fade77251ca91b7bf4b2c5ccd46f9d2bbce27c94abe2"
+  }
+}

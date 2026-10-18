@@ -26,6 +26,7 @@ from developer.assistant import AnthropicDecisionModel, DeveloperAssistant, Rule
 from developer.data import DOCS
 from developer.events import event_sink
 from developer.public_knowledge import PublicDocsKnowledge
+from developer.prompts import describe as describe_prompts
 from mcp.knowledge_base import KnowledgeBase
 from mcp.tool_manager import MCPToolManager
 from memory.conversation_memory import MemoryManager
@@ -274,6 +275,12 @@ async def health():
     if _developer is None:
         raise HTTPException(503, "服务未就绪")
     return {"status": "ok", "service": "devtrace"}
+
+
+@app.get('/developer/prompts', tags=['开发者助手'])
+async def developer_prompts(user_id: str = Depends(current_user)):
+    """Prompt version and sizes only; never expose full system prompts."""
+    return describe_prompts()
 
 @app.post("/developer/chat", tags=["开发者助手"])
 async def developer_chat(req: DeveloperChatRequest, user_id: str = Depends(current_user),
