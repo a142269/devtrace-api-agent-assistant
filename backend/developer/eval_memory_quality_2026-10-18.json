@@ -1,0 +1,15 @@
+{
+  "checks": {
+    "compression_triggered": true,
+    "facts_retained": 3,
+    "facts_total": 3,
+    "working_after_compress": 5,
+    "episodic_written": 1,
+    "export_has_summary": true,
+    "user_isolation": true,
+    "forget_cleared": true
+  },
+  "passed": true,
+  "summary_chars": 56,
+  "limitations": "Uses a deterministic summarizer and in-memory Redis/Chroma doubles, so it measures the compression/export/forget pipeline, not the quality of a live model summary."
+}

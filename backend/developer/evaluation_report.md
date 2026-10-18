@@ -66,7 +66,7 @@ Vue 生产镜像此前使用 Node 20.20.2 构建通过。Playwright 实际打开
 
 ```text
 python -m unittest discover -s tests
-Ran 98 tests in 6.0s
+Ran 104 tests in 11.0s
 OK
 ```
 
@@ -191,6 +191,17 @@ Agent 新增 `search_public_docs` 工具与 `public_api` 计划路径；模型�
 - 过程中修复了模型模式的一个真实缺陷：模型给工具传参可能缺少必填字段，现改为缺字段时回退到规则构造的参数，避免"计划等待 + 工具失败"。
 - 局限：手册是官方文档摘要，不是完整错误码全集；40 条评测是作者手写症状，校验以关键词为主；未调用真实平台 API；厂商文档更新后需要人工复核。
 
+## 记忆管理与质量（2026-10-18）
+
+补齐记忆的可管理性，并给压缩管线加回归：
+
+- 新接口：`GET /developer/memory/{conversation_id}` 导出该用户该会话的工作记忆/摘要/画像；`DELETE` 清空工作记忆、摘要、情景记录和计划检查点（用户画像保留，因为是用户级）。
+- `MemoryManager.export_memory / forget_conversation`：Redis 工作记忆/摘要删除、ChromaDB 按 `user_id + conv_id` 删除情景记录；所有导出/删除按 token 用户隔离。
+- 质量检查：`developer/evaluate_memory_quality.py` 用确定性摘要器 + 内存 Redis/Chroma 跑压缩管线，校验 3 个关键事实保留、压缩后保留 5 条、情景写入、用户隔离、遗忘清空；报告 [eval_memory_quality_2026-10-18.json](eval_memory_quality_2026-10-18.json)。
+- 测试：`tests/test_memory_management.py` 6 个用例（导出、遗忘、profile 保留、用户隔离、两个端点鉴权/计划清理），测试总数 104；Docker + 真实模型 HTTP 验证一次诊断后消息数 2、删除后清空、计划检查点删除，报告 [eval_memory_management_http_2026-10-18.json](eval_memory_management_http_2026-10-18.json)。
+
+局限：质量检查用确定性摘要器和内存替身，**不评测真实模型摘要/画像质量**；遗忘不删用户级画像；情景记忆仍依赖 ChromaDB 0.5.23。
+
 ## MCP 协议接入（2026-10-18）
 
 新增标准 Model Context Protocol 的最小实现：
@@ -199,7 +210,7 @@ Agent 新增 `search_public_docs` 工具与 `public_api` 计划路径；模型�
 - `backend/mcp/client.py`：`MCPClient` + `InProcessTransport`（默认，本地演示）与 `StdioTransport`（子进程、按行 JSON）；`call_tool` 解析 `content` 文本并区分 `isError`。
 - Agent 集成：`DEVTRACE_MCP_PUBLIC_TOOLS=enabled` 时，`public_api` 路径用 `mcp_lookup_error_playbook` / `mcp_search_public_docs`，由 MCP server 托管；本地 9 个工具保持不变，默认关闭时行为不变。
 - 评测：10 条公开 API 问题走 MCP 工具路径 **10/10**（计划完成、仅使用 MCP 工具、带来源与公开文档声明），报告 [eval_mcp_2026-10-18.json](eval_mcp_2026-10-18.json)；Docker + 真实模型验证工具清单恰为 `mcp_lookup_error_playbook → mcp_search_public_docs`、有恢复建议与来源，报告 [eval_mcp_http_2026-10-18.json](eval_mcp_http_2026-10-18.json)。
-- 测试：initialize/tools/list/tools/call、未知工具报错、Agent 走 MCP 路径，共 4 个新用例（测试总数 98）。
+- 测试：initialize/tools/list/tools/call、未知工具报错、Agent 走 MCP 路径，共 4 个新用例（测试总数 104）。
 
 局限：MCP server 只托管 2 个文档工具，未迁移全部 9 个工具；没有外部 MCP server 配置/发现/鉴权；stdio transport 已实现但自动化评测主要用 in-process transport；协议版本固定 `2024-11-05`。
 
@@ -210,7 +221,7 @@ Agent 新增 `search_public_docs` 工具与 `public_api` 计划路径；模型�
 - 五个 `string.Template`：`SYSTEM / PLAN / ACTION / NATIVE_ACTION / REVISE`，统一由 `PROMPT_VERSION`（当前 `2026-10-18.1`）标识；`render(name, **values)` 显式填充。
 - 响应新增 `prompt_version`；`GET /developer/prompts` 只返回版本和每个模板字符数，不返回正文。
 - 快照回归：`evaluate_prompts.py` 对固定 fixtures 渲染后计算 SHA-256 存入 `prompt_snapshots.json`，并检查安全契约（"不可信数据""只输出 JSON""ready_steps""不能重复"等）；CI 运行 `python -m developer.evaluate_prompts`，提示词变更必须显式 `--update` 并审阅 diff。
-- 测试：快照匹配、契约、未知模板拒绝、元数据不泄露正文、响应带 `prompt_version`，共 5 个新用例（测试总数 98）。
+- 测试：快照匹配、契约、未知模板拒绝、元数据不泄露正文、响应带 `prompt_version`，共 5 个新用例（测试总数 104）。
 - Docker + 真实模型 HTTP：`GET /developer/prompts` 与响应版本均为 `2026-10-18.1`，元数据不含提示词正文，诊断计划完成、`decision_mode=model`；报告 [eval_prompts_http_2026-10-18.json](eval_prompts_http_2026-10-18.json)，静态回归 [eval_prompts_2026-10-18.json](eval_prompts_2026-10-18.json)。
 
 局限：没有 A/B 分流和逐模型提示词调优；快照只能证明"提示词没被悄悄改"，不能证明改得更好；注入防护仍是正则启发式。
@@ -222,7 +233,7 @@ Agent 新增 `search_public_docs` 工具与 `public_api` 计划路径；模型�
 - `planner.py` 新增 `TOOL_SCHEMAS`（与运行时工具注册表一致），`choose_action` 把当前 ready steps 对应工具的 JSON Schema 作为 Anthropic `tools` 传入，`tool_choice={"type":"auto"}`；
 - 模型返回 `tool_use` 时校验必填参数，映射到 ready step；没有 `tool_use` 或参数不足时回退 JSON 提示，再回退规则；provider 不支持 tools 时进程内禁用原生路径（避免每轮失败调用）；
 - 指标新增 `native_tool_calls`，可区分"模型原生调用"与"JSON 降级"；
-- 测试：原生选择、缺参回退、Schema 覆盖 3 个新用例（测试总数 98）。
+- 测试：原生选择、缺参回退、Schema 覆盖 3 个新用例（测试总数 104）。
 
 真实模型验证（DeepSeek Anthropic 兼容端点，Docker + `POST /developer/chat`）：4 次模型调用中 **3 次为原生 tool_use**，行动顺序 `search_api_docs → get_request_trace → inspect_key_scope`，计划完成、`decision_mode=model`、无规则降级；报告 [eval_native_tools_2026-10-18.json](eval_native_tools_2026-10-18.json)。
 

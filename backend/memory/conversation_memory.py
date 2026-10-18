@@ -17,7 +17,7 @@ import json
 import logging
 import time
 from dataclasses import dataclass, field
-from datetime import datetime, timedelta
+from datetime import datetime
 from enum import Enum
 from typing import Any, Dict, List, Optional
 
@@ -257,8 +257,49 @@ class MemoryManager:
             summary=summary,
         )
 
-    # ── 压缩（防止 context 爆炸）─────────────────────────────────────────────
+    async def export_memory(self, user_id: str, conv_id: str) -> Dict[str, Any]:
+        """Export one conversation's persisted memory for inspection/debugging."""
+        user_id = self._safe_text(user_id)
+        conv_id = self._safe_text(conv_id)
+        messages = await self._get_working_memory(user_id, conv_id)
+        summary = await self._redis.get(self._summary_key(user_id, conv_id)) or ""
+        profile = await self._get_profile(user_id)
+        return {
+            "conversation_id": conv_id,
+            "messages": [{"role": message.role.value, "content": message.content,
+                          "ts": message.timestamp.isoformat()} for message in messages],
+            "summary": summary,
+            "user_profile": profile,
+            "counts": {"messages": len(messages), "summary_chars": len(summary),
+                       "has_profile": bool(profile)},
+        }
 
+    async def forget_conversation(self, user_id: str, conv_id: str) -> Dict[str, Any]:
+        """Delete one conversation's working memory, summary and episodic records.
+
+        The user profile is user-level, not conversation-level, so it is kept.
+        """
+        user_id = self._safe_text(user_id)
+        conv_id = self._safe_text(conv_id)
+        deleted_wm = await self._redis.delete(self._wm_key(user_id, conv_id))
+        deleted_summary = await self._redis.delete(self._summary_key(user_id, conv_id))
+        episodic_deleted = False
+        episodic_error = ""
+        try:
+            await asyncio.to_thread(
+                self._episodic.delete,
+                where={"$and": [{"user_id": user_id}, {"conv_id": conv_id}]})
+            episodic_deleted = True
+        except Exception as exc:  # noqa: BLE001 - Chroma may be empty/unavailable
+            episodic_error = str(exc)[:200]
+        return {"conversation_id": conv_id,
+                "working_memory_deleted": bool(deleted_wm),
+                "summary_deleted": bool(deleted_summary),
+                "episodic_deleted": episodic_deleted,
+                "episodic_error": episodic_error,
+                "profile_kept": True}
+
+    # ── 压缩（防止 context 爆炸）─────────────────────────────────────────────
     async def _compress(self, user_id: str, conv_id: str) -> None:
         """
         工作记忆压缩：

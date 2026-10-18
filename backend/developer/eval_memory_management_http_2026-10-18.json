@@ -1,0 +1,10 @@
+{
+  "checks": {
+    "messages_before": 2,
+    "summary_field_present": true,
+    "delete_cleared": true,
+    "plan_deleted": true
+  },
+  "conversation_id": "d8f20f0c-8b7b-49ca-ac5b-87bbbe0ca9e3",
+  "passed": true
+}

@@ -341,6 +341,27 @@ async def developer_chat(req: DeveloperChatRequest, user_id: str = Depends(curre
             except BaseException:
                 pass
 
+@app.get('/developer/memory/{conversation_id}', tags=['开发者助手'])
+async def developer_memory(conversation_id: str, user_id: str = Depends(current_user)):
+    """Export this user's persisted memory for one conversation."""
+    if _developer is None:
+        raise HTTPException(503, '开发者助手未就绪')
+    return await _developer.memory.export_memory(user_id, conversation_id)
+
+
+@app.delete('/developer/memory/{conversation_id}', tags=['开发者助手'])
+async def developer_memory_delete(conversation_id: str, user_id: str = Depends(current_user)):
+    """Forget one conversation (working memory, summary, episodic records)."""
+    if _developer is None:
+        raise HTTPException(503, '开发者助手未就绪')
+    result = await _developer.memory.forget_conversation(user_id, conversation_id)
+    plan_key = 'developer:plan:' + hashlib.sha256(
+        f'{user_id}\0{conversation_id}'.encode()).hexdigest()
+    deleted_plan = await _developer.redis.delete(plan_key)
+    result['plan_deleted'] = bool(deleted_plan)
+    return result
+
+
 @app.get('/developer/runs', tags=['开发者助手'])
 async def developer_runs(user_id: str = Depends(current_user)):
     if _developer is None:
