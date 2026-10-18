@@ -104,10 +104,12 @@ class PublicDocsTests(unittest.IsolatedAsyncioTestCase):
         result = await self.assistant.run("GitHub API 返回 403 rate limit 怎么处理", "u-public")
         self.assertEqual(result["kind"], "public_api")
         self.assertEqual(result["plan"]["status"], "complete")
-        self.assertEqual([action["tool"] for action in result["actions"]], ["search_public_docs"])
+        self.assertEqual([action["tool"] for action in result["actions"]],
+                         ["lookup_error_playbook", "search_public_docs"])
         self.assertIn("docs.github.com", result["answer"])
         self.assertIn("公开 API 文档摘要", result["answer"])
         self.assertIn("速率限制", result["answer"])
+        self.assertIn("处理建议", result["answer"])
 
     async def test_model_plan_uses_public_path_for_named_third_party_apis(self):
         from developer.assistant import AnthropicDecisionModel
@@ -115,7 +117,19 @@ class PublicDocsTests(unittest.IsolatedAsyncioTestCase):
         model = object.__new__(AnthropicDecisionModel)
         plan = await model.make_plan("GitHub API 返回 403 rate limit 怎么处理", "")
         self.assertEqual(plan["kind"], "public_api")
-        self.assertEqual(plan["tools"], ["search_public_docs"])
+        self.assertEqual(plan["tools"], ["lookup_error_playbook", "search_public_docs"])
+
+    def test_error_playbook_lookup_returns_retry_guidance(self):
+        from developer.error_playbooks import lookup_playbook, count
+
+        self.assertGreaterEqual(count(), 30)
+        results = lookup_playbook("Stripe 429 too many requests", api="Stripe", http_status=429)
+        self.assertTrue(results)
+        self.assertEqual(results[0]["api"], "Stripe")
+        self.assertTrue(results[0]["retryable"])
+        self.assertTrue(results[0]["recovery"])
+        no_retry = lookup_playbook("Stripe 401 invalid api key", api="Stripe", http_status=401)
+        self.assertFalse(no_retry[0]["retryable"])
 
     async def test_unknown_public_api_still_cites_available_docs(self):
         result = await self.assistant.run("公开 API 文档里 Stripe webhook 签名失败怎么办", "u-public-2")

@@ -66,7 +66,7 @@ Vue 生产镜像此前使用 Node 20.20.2 构建通过。Playwright 实际打开
 
 ```text
 python -m unittest discover -s tests
-Ran 78 tests in 5.4s
+Ran 79 tests in 5.5s
 OK
 ```
 
@@ -175,6 +175,21 @@ Agent 新增 `search_public_docs` 工具与 `public_api` 计划路径；模型�
 - Docker + 真实模型 HTTP：问题"DeepSeek 402 Insufficient Balance 是余额不足吗"返回 `kind=public_api`、`plan=complete`、工具 `search_public_docs`，答复引用 `api-docs.deepseek.com` 并区分 402 与 429，带公开文档声明；见 [eval_public_docs_http_2026-10-18.json](eval_public_docs_http_2026-10-18.json)。
 - 导入命令：`python -m developer.ingest_public_docs --source <OpenAPI.json|Markdown> --api <名称> --source-url <链接> --license <许可> --filter "关键词1,关键词2" --output <json>`；生成文件放入 `public_docs_data/` 即自动加载。
 - 局限：Stripe 导入的是完整 612 个操作规格，但规格描述可能滞后于厂商文档；AI API 摘要来自官方公开文档、非全文；中文意图扩展是手工映射；没有调用真实 API，也没有做真实故障注入；许可与归属已随条目记录，商业使用前需自行复核。
+
+## 错误处置手册（2026-10-18）
+
+针对"开发者平台 API 排障"补了一层结构化知识：`backend/developer/error_playbooks.json` 收录 Stripe、GitHub、Twilio 各 12 条高频错误（共 36 条），字段包括 `api`、`http_status`、`error_code`、症状词、含义、`retryable`、`retry_policy`、`recovery`、来源 URL 与更新时间。Agent 新增 `lookup_error_playbook` 工具，在 `public_api` 路径中先查处置手册、再查接口/文档，答复输出"可重试性 + 退避策略 + 处理建议 + 来源"。
+
+| 平台 | 覆盖示例 | 规则模式评测 |
+| --- | --- | --- |
+| Stripe | 401 invalid key、403 restricted key、429 限流/并发、400 参数、402 拒付、404 资源、409 幂等、Webhook 验签、500/503 | 14/14 |
+| GitHub | 401 Bad credentials/过期、403 主/二级限流/SSO、404、422、400、429、500/503、Webhook 验签/投递 | 13/13 |
+| Twilio | 401 20003、403 20403/21408、429 20429/队列/日配额、400 21211/21602/21614、404 20404、500/503、Webhook 验签/回调 | 13/13 |
+| **合计** | 40 条症状问题 | **40/40** |
+
+- 报告：[eval_error_playbooks_2026-10-18.json](eval_error_playbooks_2026-10-18.json)；Docker 真实模型 HTTP 验证 "Stripe 429 怎么退避" → 计划完成、`lookup_error_playbook` + `search_public_docs`、答复含"可重试/退避策略/处理建议"与 `docs.stripe.com` 来源：[eval_error_playbooks_http_2026-10-18.json](eval_error_playbooks_http_2026-10-18.json)。
+- 过程中修复了模型模式的一个真实缺陷：模型给工具传参可能缺少必填字段，现改为缺字段时回退到规则构造的参数，避免"计划等待 + 工具失败"。
+- 局限：手册是官方文档摘要，不是完整错误码全集；40 条评测是作者手写症状，校验以关键词为主；未调用真实平台 API；厂商文档更新后需要人工复核。
 
 ## 依赖安全检查（2026-10-18）
 

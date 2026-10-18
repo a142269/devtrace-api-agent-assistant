@@ -1,0 +1,16 @@
+{
+  "http_status": 200,
+  "kind": "public_api",
+  "plan_status": "complete",
+  "tools": [
+    "lookup_error_playbook",
+    "search_public_docs"
+  ],
+  "decision_mode": "model",
+  "has_playbook": true,
+  "has_retry_guidance": true,
+  "has_recovery": true,
+  "has_source": true,
+  "has_public_disclaimer": true,
+  "answer_excerpt": "错误处置：Stripe 429 限流（可重试，来源 https://docs.stripe.com/rate-limits）\n退避策略：指数退避 + 抖动，优先遵循 Retry-After；写请求复用同一幂等键。\n处理建议：降低并发和轮询频率；读取 Retry-After 后重试；写请求复用 Idempotency-Key；持续 429 检查是否可用 Webhook 替代轮询。\n错误处置：Stripe 429 并发锁/速率限制（可重试，来源 https://docs.stripe.com/rate-limits）\n退避策略：退避后重试；写请求配合幂等键。\n处理建议：降低并发，改为串行或队列处理；对同一资源避免并发更新；按 Retry-After 退避。\n参考公开文档《Stripe API：429 限流与重试》（https://docs.stripe.com/rate-limits）：Stripe 在请求过快时返回 429 Too Many Requests。应使用指数退避并限制并发，读请求可重试；写请求应配合 Idempotency-Key，避免重试造成重复扣款。持续 429 应检查是"
+}

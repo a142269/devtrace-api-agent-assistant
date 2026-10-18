@@ -21,6 +21,7 @@ from memory.conversation_memory import MsgRole
 logger = logging.getLogger(__name__)
 model_metrics = contextvars.ContextVar('developer_model_metrics', default=None)
 
+from developer.error_playbooks import lookup_playbook
 from developer.planner import (KIND_TO_TOOLS, TOOL_EVIDENCE, TOOL_TITLES, _approved_tools, _ready_steps)
 from developer.public_docs import detect_public_api
 from developer.security import scan_observation, scan_untrusted, tainted_sources
@@ -100,9 +101,14 @@ class RuleDecisionModel:
             return {"action": "finish"}
         tool = pending["tool"]
         issue_id = state.get("issue_id", "")
+        status_match = re.search(r'\b([45]\d\d)\b', message)
+        playbook_args = {"symptom": message[:300], "api": detect_public_api(message)}
+        if status_match:
+            playbook_args["http_status"] = int(status_match.group(1))
         args = {
             "search_api_docs": {"query": f"{state.get('api_version', 'v1')} {state['kind']} {message[:100]}", "top_k": 3},
             "search_public_docs": {"query": message[:300], "api": detect_public_api(message)},
+            "lookup_error_playbook": playbook_args,
             "get_request_trace": {"request_id": issue_id},
             "inspect_key_scope": {"key_prefix": state.get("key_prefix", "")},
             "get_webhook_delivery": {"delivery_id": issue_id},
@@ -143,6 +149,17 @@ class RuleDecisionModel:
                     if isinstance(doc, dict):
                         lines.append(
                             f"参考公开文档《{doc.get('title')}》（{doc.get('source_url')}）：{doc.get('content')}")
+            elif item["tool"] == "lookup_error_playbook" and isinstance(data, list):
+                for entry in data[:2]:
+                    if not isinstance(entry, dict):
+                        continue
+                    retry = "可重试" if entry.get("retryable") else "不可重试"
+                    lines.append(
+                        f"错误处置：{entry.get('title')}（{retry}，来源 {entry.get('source_url')}）")
+                    if entry.get("retry_policy"):
+                        lines.append(f"退避策略：{entry['retry_policy']}。")
+                    if entry.get("recovery"):
+                        lines.append("处理建议：" + "；".join(entry["recovery"]) + "。")
         delivery = next((a['result'] for a in observations if a['tool'] == 'get_webhook_delivery'
                          and isinstance(a.get('result'), dict)), None)
         related = next((a['result'] for a in observations if a['tool'] == 'get_related_request_trace'
@@ -206,14 +223,14 @@ class AnthropicDecisionModel(RuleDecisionModel):
         public_api = detect_public_api(message)
         if public_api:
             return {"kind": "public_api", "goal": f"查询 {public_api} 公开 API 文档",
-                    "tools": ["search_public_docs"]}
+                    "tools": ["lookup_error_playbook", "search_public_docs"]}
         fallback = await super().make_plan(message, memory, previous)
         try:
             result = await self._ask(
                 "根据问题生成可执行的多步计划。只允许 kind=auth/quota/webhook/public_api；对应工具分别是 "
                 "auth:[search_api_docs,get_request_trace,inspect_key_scope], "
                 "quota:[search_api_docs,get_request_trace], webhook:[search_api_docs,get_webhook_delivery], "
-                "public_api:[search_public_docs]（用户询问公开 API 文档、错误码、限流或 Webhook 规范时使用；"
+                "public_api:[lookup_error_playbook,search_public_docs]（用户询问公开 API 文档、错误码、限流或 Webhook 规范时使用；"
                 "提到 GitHub/Stripe/OpenAI/Twilio/Petstore 等第三方 API 时必须走 public_api，不要等待 request_id）。"
                 "先核验记录与文档，权限工具是否需要可依观察调整；"
                 "鉴权权限摘要必须在请求记录之后。"
@@ -245,7 +262,15 @@ class AnthropicDecisionModel(RuleDecisionModel):
             selected = next((step for step in ready if step["id"] == result.get("step_id")
                              and step["tool"] == result.get("tool")), None)
             if (selected and result.get("action") == "tool" and isinstance(result.get("args"), dict)):
-                # Tool arguments are still checked by the manager and the executor.
+                # The model may omit required fields; fall back to the rule-built args
+                # instead of executing a call that is guaranteed to fail validation.
+                required = {"lookup_error_playbook": {"symptom"},
+                            "search_public_docs": {"query"}}.get(selected["tool"], set())
+                if required.issubset(result["args"]):
+                    return result
+                fallback = await super().choose_action(state, message)
+                if fallback.get("action") == "tool" and fallback.get("tool") == selected["tool"]:
+                    return fallback
                 return result
         except Exception as ex:
             logger.warning("开发者行动选择失败，按计划执行 (HTTP %s)", getattr(ex, "status_code", "unknown"))
@@ -303,6 +328,12 @@ class DeveloperAssistant:
             return self.public_knowledge.search(
                 params["query"], api=params.get("api", ""), top_k=params.get("top_k", 4))
 
+        async def playbook(params, _context):
+            http_status = params.get("http_status")
+            return lookup_playbook(params["symptom"], api=params.get("api", ""),
+                                   http_status=int(http_status) if http_status else None,
+                                   top_k=params.get("top_k", 3))
+
         async def sandbox_get(path: str):
             async with httpx.AsyncClient(timeout=10) as client:
                 response = await client.get(self.sandbox_url + path)
@@ -339,6 +370,9 @@ class DeveloperAssistant:
             ("get_related_request_trace", request, {"request_id": "string"}, ["request_id"], 0),
             ("search_quota_docs", docs, {"query": "string", "top_k": "integer"}, ["query"], 300),
             ("search_public_docs", public_docs, {"query": "string", "api": "string", "top_k": "integer"}, ["query"], 0),
+            ("lookup_error_playbook", playbook,
+             {"symptom": "string", "api": "string", "http_status": "integer", "top_k": "integer"},
+             ["symptom"], 0),
             ("create_support_ticket", ticket, {"issue_id": "string"}, ["issue_id"], 0),
         ]
         for name, handler, props, required, ttl in definitions:
@@ -680,6 +714,8 @@ class DeveloperAssistant:
             return f"找到 {len(data or [])} 个模拟平台文档片段"
         if tool == "search_public_docs":
             return f"找到 {len(data or [])} 条公开 API 文档摘要"
+        if tool == "lookup_error_playbook":
+            return f"找到 {len(data or [])} 条错误处置条目"
         if tool in {"get_request_trace", "get_related_request_trace"}:
             return f"HTTP {data.get('status')}；{_untrusted_text(data.get('error_summary'))}"
         if tool == "inspect_key_scope":

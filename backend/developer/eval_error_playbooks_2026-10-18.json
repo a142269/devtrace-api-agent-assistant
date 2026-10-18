@@ -1,0 +1,422 @@
+{
+  "mode": "rules-in-process",
+  "count": 40,
+  "passed": 40,
+  "by_api": {
+    "Stripe": {
+      "passed": 14,
+      "count": 14
+    },
+    "GitHub": {
+      "passed": 13,
+      "count": 13
+    },
+    "Twilio": {
+      "passed": 13,
+      "count": 13
+    }
+  },
+  "cases": [
+    {
+      "id": "stripe_401",
+      "api": "Stripe",
+      "passed": true,
+      "reasons": [],
+      "tools": [
+        "lookup_error_playbook",
+        "search_public_docs"
+      ]
+    },
+    {
+      "id": "stripe_403",
+      "api": "Stripe",
+      "passed": true,
+      "reasons": [],
+      "tools": [
+        "lookup_error_playbook",
+        "search_public_docs"
+      ]
+    },
+    {
+      "id": "stripe_429",
+      "api": "Stripe",
+      "passed": true,
+      "reasons": [],
+      "tools": [
+        "lookup_error_playbook",
+        "search_public_docs"
+      ]
+    },
+    {
+      "id": "stripe_400",
+      "api": "Stripe",
+      "passed": true,
+      "reasons": [],
+      "tools": [
+        "lookup_error_playbook",
+        "search_public_docs"
+      ]
+    },
+    {
+      "id": "stripe_402",
+      "api": "Stripe",
+      "passed": true,
+      "reasons": [],
+      "tools": [
+        "lookup_error_playbook",
+        "search_public_docs"
+      ]
+    },
+    {
+      "id": "stripe_404",
+      "api": "Stripe",
+      "passed": true,
+      "reasons": [],
+      "tools": [
+        "lookup_error_playbook",
+        "search_public_docs"
+      ]
+    },
+    {
+      "id": "stripe_409",
+      "api": "Stripe",
+      "passed": true,
+      "reasons": [],
+      "tools": [
+        "lookup_error_playbook",
+        "search_public_docs"
+      ]
+    },
+    {
+      "id": "stripe_webhook",
+      "api": "Stripe",
+      "passed": true,
+      "reasons": [],
+      "tools": [
+        "lookup_error_playbook",
+        "search_public_docs"
+      ]
+    },
+    {
+      "id": "stripe_500",
+      "api": "Stripe",
+      "passed": true,
+      "reasons": [],
+      "tools": [
+        "lookup_error_playbook",
+        "search_public_docs"
+      ]
+    },
+    {
+      "id": "stripe_503",
+      "api": "Stripe",
+      "passed": true,
+      "reasons": [],
+      "tools": [
+        "lookup_error_playbook",
+        "search_public_docs"
+      ]
+    },
+    {
+      "id": "stripe_key_mode",
+      "api": "Stripe",
+      "passed": true,
+      "reasons": [],
+      "tools": [
+        "lookup_error_playbook",
+        "search_public_docs"
+      ]
+    },
+    {
+      "id": "stripe_concurrency",
+      "api": "Stripe",
+      "passed": true,
+      "reasons": [],
+      "tools": [
+        "lookup_error_playbook",
+        "search_public_docs"
+      ]
+    },
+    {
+      "id": "stripe_400b",
+      "api": "Stripe",
+      "passed": true,
+      "reasons": [],
+      "tools": [
+        "lookup_error_playbook",
+        "search_public_docs"
+      ]
+    },
+    {
+      "id": "stripe_402b",
+      "api": "Stripe",
+      "passed": true,
+      "reasons": [],
+      "tools": [
+        "lookup_error_playbook",
+        "search_public_docs"
+      ]
+    },
+    {
+      "id": "github_401",
+      "api": "GitHub",
+      "passed": true,
+      "reasons": [],
+      "tools": [
+        "lookup_error_playbook",
+        "search_public_docs"
+      ]
+    },
+    {
+      "id": "github_403",
+      "api": "GitHub",
+      "passed": true,
+      "reasons": [],
+      "tools": [
+        "lookup_error_playbook",
+        "search_public_docs"
+      ]
+    },
+    {
+      "id": "github_secondary",
+      "api": "GitHub",
+      "passed": true,
+      "reasons": [],
+      "tools": [
+        "lookup_error_playbook",
+        "search_public_docs"
+      ]
+    },
+    {
+      "id": "github_scope",
+      "api": "GitHub",
+      "passed": true,
+      "reasons": [],
+      "tools": [
+        "lookup_error_playbook",
+        "search_public_docs"
+      ]
+    },
+    {
+      "id": "github_404",
+      "api": "GitHub",
+      "passed": true,
+      "reasons": [],
+      "tools": [
+        "lookup_error_playbook",
+        "search_public_docs"
+      ]
+    },
+    {
+      "id": "github_422",
+      "api": "GitHub",
+      "passed": true,
+      "reasons": [],
+      "tools": [
+        "lookup_error_playbook",
+        "search_public_docs"
+      ]
+    },
+    {
+      "id": "github_400",
+      "api": "GitHub",
+      "passed": true,
+      "reasons": [],
+      "tools": [
+        "lookup_error_playbook",
+        "search_public_docs"
+      ]
+    },
+    {
+      "id": "github_429",
+      "api": "GitHub",
+      "passed": true,
+      "reasons": [],
+      "tools": [
+        "lookup_error_playbook",
+        "search_public_docs"
+      ]
+    },
+    {
+      "id": "github_500",
+      "api": "GitHub",
+      "passed": true,
+      "reasons": [],
+      "tools": [
+        "lookup_error_playbook",
+        "search_public_docs"
+      ]
+    },
+    {
+      "id": "github_503",
+      "api": "GitHub",
+      "passed": true,
+      "reasons": [],
+      "tools": [
+        "lookup_error_playbook",
+        "search_public_docs"
+      ]
+    },
+    {
+      "id": "github_expired",
+      "api": "GitHub",
+      "passed": true,
+      "reasons": [],
+      "tools": [
+        "lookup_error_playbook",
+        "search_public_docs"
+      ]
+    },
+    {
+      "id": "github_webhook",
+      "api": "GitHub",
+      "passed": true,
+      "reasons": [],
+      "tools": [
+        "lookup_error_playbook",
+        "search_public_docs"
+      ]
+    },
+    {
+      "id": "github_delivery",
+      "api": "GitHub",
+      "passed": true,
+      "reasons": [],
+      "tools": [
+        "lookup_error_playbook",
+        "search_public_docs"
+      ]
+    },
+    {
+      "id": "twilio_401",
+      "api": "Twilio",
+      "passed": true,
+      "reasons": [],
+      "tools": [
+        "lookup_error_playbook",
+        "search_public_docs"
+      ]
+    },
+    {
+      "id": "twilio_403",
+      "api": "Twilio",
+      "passed": true,
+      "reasons": [],
+      "tools": [
+        "lookup_error_playbook",
+        "search_public_docs"
+      ]
+    },
+    {
+      "id": "twilio_429",
+      "api": "Twilio",
+      "passed": true,
+      "reasons": [],
+      "tools": [
+        "lookup_error_playbook",
+        "search_public_docs"
+      ]
+    },
+    {
+      "id": "twilio_21211",
+      "api": "Twilio",
+      "passed": true,
+      "reasons": [],
+      "tools": [
+        "lookup_error_playbook",
+        "search_public_docs"
+      ]
+    },
+    {
+      "id": "twilio_20404",
+      "api": "Twilio",
+      "passed": true,
+      "reasons": [],
+      "tools": [
+        "lookup_error_playbook",
+        "search_public_docs"
+      ]
+    },
+    {
+      "id": "twilio_21602",
+      "api": "Twilio",
+      "passed": true,
+      "reasons": [],
+      "tools": [
+        "lookup_error_playbook",
+        "search_public_docs"
+      ]
+    },
+    {
+      "id": "twilio_queue",
+      "api": "Twilio",
+      "passed": true,
+      "reasons": [],
+      "tools": [
+        "lookup_error_playbook",
+        "search_public_docs"
+      ]
+    },
+    {
+      "id": "twilio_500",
+      "api": "Twilio",
+      "passed": true,
+      "reasons": [],
+      "tools": [
+        "lookup_error_playbook",
+        "search_public_docs"
+      ]
+    },
+    {
+      "id": "twilio_503",
+      "api": "Twilio",
+      "passed": true,
+      "reasons": [],
+      "tools": [
+        "lookup_error_playbook",
+        "search_public_docs"
+      ]
+    },
+    {
+      "id": "twilio_webhook_signature",
+      "api": "Twilio",
+      "passed": true,
+      "reasons": [],
+      "tools": [
+        "lookup_error_playbook",
+        "search_public_docs"
+      ]
+    },
+    {
+      "id": "twilio_webhook_400",
+      "api": "Twilio",
+      "passed": true,
+      "reasons": [],
+      "tools": [
+        "lookup_error_playbook",
+        "search_public_docs"
+      ]
+    },
+    {
+      "id": "twilio_geo",
+      "api": "Twilio",
+      "passed": true,
+      "reasons": [],
+      "tools": [
+        "lookup_error_playbook",
+        "search_public_docs"
+      ]
+    },
+    {
+      "id": "twilio_daily",
+      "api": "Twilio",
+      "passed": true,
+      "reasons": [],
+      "tools": [
+        "lookup_error_playbook",
+        "search_public_docs"
+      ]
+    }
+  ],
+  "limitations": "36 hand-curated playbooks from official public docs; no real platform calls; rules mode only; status/title checks are keyword-based, not a human review of every recommendation; playbooks can lag vendor documentation."
+}
