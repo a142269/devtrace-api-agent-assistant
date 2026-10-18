@@ -1,6 +1,6 @@
 {
   "url": "http://localhost:5174/",
-  "started_at": "2026-10-18T10:11:28.842Z",
+  "started_at": "2026-10-18T10:23:58.885Z",
   "steps": [
     {
       "step": "page_loaded",
@@ -14,6 +14,10 @@
     },
     {
       "step": "injection_diagnosis_rendered"
+    },
+    {
+      "step": "mobile_diagnosis_rendered",
+      "overflow_px": 0
     }
   ],
   "checks": {
@@ -25,10 +29,19 @@
     "run_history": true,
     "injection_flagged": true,
     "tainted_action": true,
-    "no_ticket": true
+    "no_ticket": true,
+    "mobile_labelled_login": true,
+    "mobile_labelled_composer": true,
+    "mobile_no_horizontal_overflow": true,
+    "mobile_diagnosis": true
   },
   "console_errors": [],
   "failed_requests": [],
-  "finished_at": "2026-10-18T10:11:53.286Z",
+  "mobile": {
+    "viewport": "390x844",
+    "overflow_px": 0,
+    "console_errors": 0
+  },
+  "finished_at": "2026-10-18T10:24:30.392Z",
   "passed": true
 }

@@ -15,7 +15,7 @@ Agent 从会话记忆和历史证据开始，生成诊断计划，调用文档�
 - **可追溯工具调用**：版本化文档检索、脱敏请求记录、密钥权限摘要、Webhook 投递记录和幂等工单。
 - **证据驱动诊断**：多条带来源的假设，区分"被观察支持""被证据否定""仅观察到"；请求记录与密钥状态互相矛盾时显式报告证据冲突，关联请求成功时用排除法而不是默认因果关系。
 - **安全边界**：API Key 脱敏，工具参数从用户输入或已观察记录取得；工单必须由用户明确授权；用户文本与工具观察中的指令会在时间线中标记为不可信数据，不会作为工具指令执行。依赖侧已做漏洞核查：ChromaDB 3 条漏洞上游暂无修复版本，保持内部网络隔离并加了 CI 审计门禁，详见[依赖与安全评估](backend/developer/依赖与安全评估_2026-10-18.md)。
-- **工程化验证**：开发者 Agent 自动化测试 68 项；新增 19 条手写标签的独立 holdout 集（冲突/注入/异常/多轮），规则模式与真实模型模式均为 19/19；2026-10-18 已在本机 Docker 全栈复验规则模式 HTTP 30/30、SSE、断流释放锁、并发 409 与跨轮恢复，并用 Playwright 在真实浏览器完成登录→诊断→注入场景联调。历史评测结果详见评测报告。
+- **工程化验证**：开发者 Agent 自动化测试 68 项；新增 19 条手写标签的独立 holdout 集（冲突/注入/异常/多轮），规则模式与真实模型模式均为 19/19；新增 12 条跨轮任务记忆评测（恢复 vs 重开均 12/12，恢复模式少约 0.91 次重复文档检索）；2026-10-18 已在本机 Docker 全栈复验规则模式 HTTP 30/30、SSE、断流释放锁、并发 409 与跨轮恢复，并用 Playwright 在桌面与移动端完成登录→诊断→注入场景联调。历史评测结果详见评测报告。
 - **组合故障与运行记录**：`delivery_combo_01` 会触发关联请求与限流文档检查；登录后可查看最近运行，逐步观察工具执行，并查看模型及工具调用耗时。
 
 ### 架构
@@ -62,6 +62,7 @@ The project intentionally uses a local mock platform and masked records. It does
 cd backend
 python -m unittest discover -s tests
 python -m developer.evaluate_holdout --mode rules --output developer/eval_holdout.json
+python -m developer.evaluate_memory_tasks --output developer/eval_memory_tasks.json
 python -m developer.audit_gate dependency-audit.json   # pip-audit JSON; blocks only fixable findings
 
 cd ../frontend

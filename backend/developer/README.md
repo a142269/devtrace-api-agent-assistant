@@ -63,10 +63,11 @@ python -m developer.evaluate_retrieval --output developer/eval_retrieval.json
 python -m developer.evaluate_scenarios --output developer/eval_scenarios.json
 python -m developer.evaluate_diagnosis --output developer/eval_diagnosis.json
 python -m developer.evaluate_holdout --mode rules --output developer/eval_holdout_rules.json
+python -m developer.evaluate_memory_tasks --output developer/eval_memory_tasks.json
 python -m developer.evaluate_memory --output developer/eval_memory.json
 ```
 
-`evaluate_holdout` 使用 19 条手写标签的独立 holdout 集（`eval_holdout_cases.json` 与专用夹具），规则模式在进程内运行；模型模式需额外传 `--mode model --base-url <地址>` 并设置 `DEVTRACE_EVAL_TOKEN`。2026-10-18 规则与模型均为 19/19，但样本小、标签由作者手写，不等同于第三方隐藏评测。
+`evaluate_holdout` 使用 19 条手写标签的独立 holdout 集（`eval_holdout_cases.json` 与专用夹具），规则模式在进程内运行；模型模式需额外传 `--mode model --base-url <地址>` 并设置 `DEVTRACE_EVAL_TOKEN`。2026-10-18 规则与模型均为 19/19，但样本小、标签由作者手写，不等同于第三方隐藏评测。`evaluate_memory_tasks` 用 12 条两轮任务比较同会话恢复与新会话重开（规则模式、stub 工作记忆），衡量跨轮任务成功与重复检索，不代表 ChromaDB 情景记忆或生产延迟。
 
 检索评测需要可用的 ChromaDB 或本地向量模型。规则规划和故障注入使用进程内模拟平台，不能视作模型的泛化评估。
 

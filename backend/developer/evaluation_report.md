@@ -122,11 +122,12 @@ Docker Desktop（Linux 容器）上使用当前 Dockerfile 与 `requirements.txt
 | 证据卡片 | 证据可支持、已支持、置信度高、建议处理与来源列表均渲染 |
 | 安全边界卡片 | 记录注入被标记"已标记"，列出指令覆盖/凭证外泄诱导与可疑来源，工具观察标注"已按数据处理" |
 | 运行历史 / Run ID | 列表与实际 `Run ID` 均显示 |
-| 浏览器错误 | console error 0，失败请求 0 |
+| 桌面浏览器错误 | console error 0，失败请求 0 |
+| 移动端 390×844 | 无横向溢出；用户名/密码/问题输入框均有可访问名称；诊断正文正常渲染；console error 0 |
 
-截图：[诊断主界面](assets/frontend-e2e-ui-2026-10-18.png)、[证据卡片](assets/frontend-e2e-evidence-2026-10-18.png)、[安全边界卡片](assets/frontend-e2e-security-2026-10-18.png)、[注入场景](assets/frontend-e2e-injection-2026-10-18.png)。机器可读结果：[eval_frontend_e2e_2026-10-18.json](eval_frontend_e2e_2026-10-18.json)。
+截图：[诊断主界面](assets/frontend-e2e-ui-2026-10-18.png)、[证据卡片](assets/frontend-e2e-evidence-2026-10-18.png)、[安全边界卡片](assets/frontend-e2e-security-2026-10-18.png)、[注入场景](assets/frontend-e2e-injection-2026-10-18.png)、[移动端](assets/frontend-e2e-mobile-2026-10-18.jpg)。机器可读结果：[eval_frontend_e2e_2026-10-18.json](eval_frontend_e2e_2026-10-18.json)。
 
-局限：只测了单浏览器、单视口和两条真实模型请求；未做无障碍、响应式和性能验证；浏览器自动化脚本在仓库外，未纳入 CI。
+局限：覆盖桌面与移动端各一个视口，只做了基础可访问名称检查（未做 axe 扫描、键盘导航、对比度与性能）；浏览器自动化脚本在仓库外，未纳入 CI。
 
 ## 独立 holdout 评测（2026-10-18）
 
@@ -140,6 +141,20 @@ Docker Desktop（Linux 容器）上使用当前 Dockerfile 与 `requirements.txt
 原始报告：[eval_holdout_rules_2026-10-18.json](eval_holdout_rules_2026-10-18.json)、[eval_holdout_model_2026-10-18.json](eval_holdout_model_2026-10-18.json)。
 
 过程与局限：模型首轮运行时镜像未包含新夹具，记录 404 导致全部 `waiting`，重建镜像后重跑；首轮后删除了一个要求固定措辞的断言（行为断言保留），这是唯一一次标签调整。标签仍是项目作者手写、与夹具同批产出，属于第二套公开 holdout，不是第三方隐藏基准；19 条样本小、模型只来自一个 provider，19/19 不能推广为真实泛化。
+
+## 跨轮任务记忆评测（2026-10-18）
+
+新增 12 条两轮任务：首轮缺少标识进入 `waiting`，第二轮补充编号；比较"同会话恢复"（工作记忆 + Redis 计划检查点）与"新会话重开"（无状态复用）。规则模式、进程内 ASGI 模拟平台、工作记忆 stub + 假 Redis。
+
+| 模式 | 成功 | 平均总工具调用 | 平均文档检索 | 第二轮文档检索 | 恢复事件 |
+| --- | --- | --- | --- | --- | --- |
+| 同会话恢复 | **12/12** | 2.67 | 1.17 | 0.17 | 12/12 |
+| 新会话重开 | **12/12** | 3.58 | 2.08 | 1.08 | 0 |
+| 差值 | 0 | **-0.91** | **-0.91** | **-0.91** | — |
+
+恢复模式平均少约 0.91 次重复文档检索（文档调用约少 44%），总工具调用约少 25%，两种模式诊断成功率相同。原始报告：[eval_memory_tasks_2026-10-18.json](eval_memory_tasks_2026-10-18.json)。
+
+局限：只衡量会话/计划复用，不衡量 ChromaDB 情景记忆质量、模型行为或生产延迟；12 条任务样本小；恢复模式在进程内的平均耗时反而更高（状态序列化开销），不能当作性能结论。
 
 ## 依赖安全检查（2026-10-18）
 

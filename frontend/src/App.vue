@@ -8,8 +8,8 @@
       <div class="workspace-card" style="max-width: 440px; margin: 4rem auto; padding: 2rem">
         <h1>登录 DevTrace</h1><p>使用管理员在本地配置的演示账号。</p>
         <form class="composer" @submit.prevent="signIn">
-          <input v-model="username" autocomplete="username" placeholder="用户名" required>
-          <input v-model="password" type="password" autocomplete="current-password" placeholder="密码" required>
+          <input v-model="username" autocomplete="username" placeholder="用户名" aria-label="用户名" required>
+          <input v-model="password" type="password" autocomplete="current-password" placeholder="密码" aria-label="密码" required>
           <p v-if="loginError" role="alert">{{ loginError }}</p>
           <button type="submit" :disabled="loginBusy">{{ loginBusy ? '登录中' : '登录' }}</button>
         </form>
@@ -30,7 +30,7 @@
       <div class="developer-layout">
         <section class="developer-chat workspace-card">
           <div class="stage-bar"><span>Python Agent · 本地模拟平台</span><span>{{ developerMessages.length }} 条消息</span></div>
-          <div class="developer-messages" ref="developerMessageList">
+          <div class="developer-messages" ref="developerMessageList" aria-live="polite">
             <article v-for="item in developerMessages" :key="item.id" :class="['developer-message', item.role]">
               <small>{{ item.role === 'user' ? '你' : '开发者助手' }}</small>
               <p>{{ item.content }}</p>
@@ -49,6 +49,7 @@
           </div>
           <form class="composer" @submit.prevent="sendDeveloperMessage">
             <textarea v-model="developerDraft" rows="3" placeholder="描述 API 问题，或补充 request_id / delivery_id…"
+              aria-label="描述 API 问题"
               @keydown.meta.enter.prevent="sendDeveloperMessage" @keydown.ctrl.enter.prevent="sendDeveloperMessage"></textarea>
             <div class="composer-bottom">
               <span>支持跨轮补充信息；创建工单需明确提出</span>
