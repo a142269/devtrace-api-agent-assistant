@@ -1,0 +1,12 @@
+{
+  "http_status": 200,
+  "kind": "public_api",
+  "plan_status": "complete",
+  "tools": [
+    "search_public_docs"
+  ],
+  "decision_mode": "model",
+  "has_source": true,
+  "has_public_disclaimer": true,
+  "answer_excerpt": "参考公开文档《GitHub REST API：401 Bad credentials》（https://docs.github.com/en/rest/authentication/authenticating-to-the-rest-api）：GitHub REST API 对缺失、无效或过期的 token 返回 401 Bad credentials。请求应使用 Authorization: Bearer <token>；token 过期、被撤销或权限不足时先核对 token 状态。401 与 403 不同：403 通常表示已认证但无权访问或触发限流。\n参考公开文档《GitHub REST API：速率限制与 403/429》（https://docs.github.com/en/rest/using-the-rest-api/rate-limits-for-the-rest-api）"
+}

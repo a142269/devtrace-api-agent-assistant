@@ -1,0 +1,116 @@
+{
+  "mode": "rules-in-process",
+  "count": 12,
+  "passed": 12,
+  "cases": [
+    {
+      "id": "github_401",
+      "passed": true,
+      "reasons": [],
+      "tools": [
+        "search_public_docs"
+      ],
+      "answer_chars": 762
+    },
+    {
+      "id": "github_rate_limit",
+      "passed": true,
+      "reasons": [],
+      "tools": [
+        "search_public_docs"
+      ],
+      "answer_chars": 822
+    },
+    {
+      "id": "github_secondary",
+      "passed": true,
+      "reasons": [],
+      "tools": [
+        "search_public_docs"
+      ],
+      "answer_chars": 822
+    },
+    {
+      "id": "github_webhook",
+      "passed": true,
+      "reasons": [],
+      "tools": [
+        "search_public_docs"
+      ],
+      "answer_chars": 762
+    },
+    {
+      "id": "stripe_401",
+      "passed": true,
+      "reasons": [],
+      "tools": [
+        "search_public_docs"
+      ],
+      "answer_chars": 569
+    },
+    {
+      "id": "stripe_rate_limit",
+      "passed": true,
+      "reasons": [],
+      "tools": [
+        "search_public_docs"
+      ],
+      "answer_chars": 569
+    },
+    {
+      "id": "stripe_webhook",
+      "passed": true,
+      "reasons": [],
+      "tools": [
+        "search_public_docs"
+      ],
+      "answer_chars": 633
+    },
+    {
+      "id": "stripe_idempotency",
+      "passed": true,
+      "reasons": [],
+      "tools": [
+        "search_public_docs"
+      ],
+      "answer_chars": 594
+    },
+    {
+      "id": "openai_401",
+      "passed": true,
+      "reasons": [],
+      "tools": [
+        "search_public_docs"
+      ],
+      "answer_chars": 478
+    },
+    {
+      "id": "openai_429",
+      "passed": true,
+      "reasons": [],
+      "tools": [
+        "search_public_docs"
+      ],
+      "answer_chars": 478
+    },
+    {
+      "id": "twilio_429",
+      "passed": true,
+      "reasons": [],
+      "tools": [
+        "search_public_docs"
+      ],
+      "answer_chars": 383
+    },
+    {
+      "id": "generic_retry",
+      "passed": true,
+      "reasons": [],
+      "tools": [
+        "search_public_docs"
+      ],
+      "answer_chars": 695
+    }
+  ],
+  "limitations": "Curated attributed summaries of public documentation, not full vendor specs; no real API calls; rules mode only; the corpus is small and hand-maintained."
+}

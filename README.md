@@ -13,9 +13,10 @@ Agent 从会话记忆和历史证据开始，生成诊断计划，调用文档�
 - **ReAct 与 Plan-and-Execute**：显示计划提议、服务端批准计划、工具行动、观察和状态变化；不展示内部推理。
 - **分层记忆**：Redis 保存工作记忆与未完成计划；ChromaDB 保存隔离的情景记忆、用户画像和开发者文档。
 - **可追溯工具调用**：版本化文档检索、脱敏请求记录、密钥权限摘要、Webhook 投递记录和幂等工单。
+- **公开 API 文档知识库**：内置 GitHub、Stripe、OpenAI、Twilio、Petstore 等官方公开文档摘要（每条带来源链接与许可说明），支持按 API 检索并在答复中引用来源；提供 OpenAPI/Markdown 导入工具，可替换为自己的文档，且不连接真实平台。
 - **证据驱动诊断**：多条带来源的假设，区分"被观察支持""被证据否定""仅观察到"；请求记录与密钥状态互相矛盾时显式报告证据冲突，关联请求成功时用排除法而不是默认因果关系。
 - **安全边界**：API Key 脱敏，工具参数从用户输入或已观察记录取得；工单必须由用户明确授权；用户文本与工具观察中的指令会在时间线中标记为不可信数据，不会作为工具指令执行。依赖侧已做漏洞核查：ChromaDB 3 条漏洞上游暂无修复版本，保持内部网络隔离并加了 CI 审计门禁，详见[依赖与安全评估](backend/developer/依赖与安全评估_2026-10-18.md)。
-- **工程化验证**：开发者 Agent 自动化测试 71 项；新增 19 条手写标签的独立 holdout 集（冲突/注入/异常/多轮），规则模式与真实模型模式均为 19/19；新增 12 条跨轮任务记忆评测（恢复 vs 重开均 12/12，恢复模式少约 0.91 次重复文档检索）；2026-10-18 已在本机 Docker 全栈复验规则模式 HTTP 30/30、SSE、断流释放锁、并发 409 与跨轮恢复，并用 Playwright 在桌面/移动端完成联调，另做键盘导航、焦点可见、抽样对比度（WCAG AA）与基础性能检查。历史评测结果详见评测报告。
+- **工程化验证**：开发者 Agent 自动化测试 76 项；新增 19 条手写标签的独立 holdout 集（冲突/注入/异常/多轮），规则模式与真实模型模式均为 19/19；新增 12 条跨轮任务记忆评测（恢复 vs 重开均 12/12，恢复模式少约 0.91 次重复文档检索）；2026-10-18 已在本机 Docker 全栈复验规则模式 HTTP 30/30、SSE、断流释放锁、并发 409 与跨轮恢复，并用 Playwright 在桌面/移动端完成联调，另做键盘导航、焦点可见、抽样对比度（WCAG AA）与基础性能检查。历史评测结果详见评测报告。
 - **组合故障与运行记录**：`delivery_combo_01` 会触发关联请求与限流文档检查；登录后可查看最近运行，逐步观察工具执行，并查看模型及工具调用耗时。
 
 ### 架构
@@ -63,6 +64,7 @@ cd backend
 python -m unittest discover -s tests
 python -m developer.evaluate_holdout --mode rules --output developer/eval_holdout.json
 python -m developer.evaluate_memory_tasks --output developer/eval_memory_tasks.json
+python -m developer.evaluate_public_docs --output developer/eval_public_docs.json
 python -m developer.audit_gate dependency-audit.json   # pip-audit JSON; blocks only fixable findings
 
 cd ../frontend

@@ -22,6 +22,7 @@ logger = logging.getLogger(__name__)
 model_metrics = contextvars.ContextVar('developer_model_metrics', default=None)
 
 from developer.planner import (KIND_TO_TOOLS, TOOL_EVIDENCE, TOOL_TITLES, _approved_tools, _ready_steps)
+from developer.public_docs import detect_public_api
 from developer.security import scan_observation, scan_untrusted, tainted_sources
 
 
@@ -76,6 +77,8 @@ def _kind(message: str, identifier: str = "") -> str:
         return "quota"
     if identifier.lower().startswith("req_auth_"):
         return "auth"
+    if detect_public_api(message) or ("公开" in text and "文档" in text):
+        return "public_api"
     if "delivery_" in text or "webhook" in text or "回调" in text or "投递" in text:
         return "webhook"
     if "quota" in text or "429" in text or "限流" in text or "配额" in text:
@@ -88,7 +91,8 @@ class RuleDecisionModel:
 
     async def make_plan(self, message: str, memory: str, previous: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
         kind = previous.get("kind") if previous and previous.get("status") == "waiting" else _kind(message)
-        return {"kind": kind, "goal": f"排查{kind}接入问题", "tools": KIND_TO_TOOLS[kind]}
+        goal = "查询公开 API 文档" if kind == "public_api" else f"排查{kind}接入问题"
+        return {"kind": kind, "goal": goal, "tools": KIND_TO_TOOLS[kind]}
 
     async def choose_action(self, state: Dict[str, Any], message: str) -> Dict[str, Any]:
         pending = next(iter(state.get("ready_steps", _ready_steps(state))), None)
@@ -98,6 +102,7 @@ class RuleDecisionModel:
         issue_id = state.get("issue_id", "")
         args = {
             "search_api_docs": {"query": f"{state.get('api_version', 'v1')} {state['kind']} {message[:100]}", "top_k": 3},
+            "search_public_docs": {"query": message[:300], "api": detect_public_api(message)},
             "get_request_trace": {"request_id": issue_id},
             "inspect_key_scope": {"key_prefix": state.get("key_prefix", "")},
             "get_webhook_delivery": {"delivery_id": issue_id},
@@ -133,6 +138,11 @@ class RuleDecisionModel:
                 lines.append(f"投递 {data.get('delivery_id')} 返回 {data.get('status')}：{_untrusted_text(data.get('error_summary'))}。")
             elif item["tool"] == "create_support_ticket" and isinstance(data, dict):
                 lines.append(f"已创建模拟工单 {data.get('ticket_id')}。")
+            elif item["tool"] == "search_public_docs" and isinstance(data, list):
+                for doc in data[:3]:
+                    if isinstance(doc, dict):
+                        lines.append(
+                            f"参考公开文档《{doc.get('title')}》（{doc.get('source_url')}）：{doc.get('content')}")
         delivery = next((a['result'] for a in observations if a['tool'] == 'get_webhook_delivery'
                          and isinstance(a.get('result'), dict)), None)
         related = next((a['result'] for a in observations if a['tool'] == 'get_related_request_trace'
@@ -140,7 +150,10 @@ class RuleDecisionModel:
         if delivery and related and delivery.get('status') == 503 and related.get('status') == 429:
             lines.append('建议先检查 Webhook 接收端可用性，同时按关联请求记录的等待时间控制重试；'
                          '这两条记录有关联，但不足以证明限流导致投递失败。')
-        return "\n".join(lines) + "\n以上仅基于本地模拟平台数据；如需排查真实系统，请提供真实平台可用的脱敏记录。"
+        suffix = ("以上内容来自公开 API 文档摘要，不连接真实平台；模拟平台数据会另行标注。"
+                  if state.get("kind") == "public_api"
+                  else "以上仅基于本地模拟平台数据；如需排查真实系统，请提供真实平台可用的脱敏记录。")
+        return "\n".join(lines) + "\n" + suffix
 
 
 class AnthropicDecisionModel(RuleDecisionModel):
@@ -189,12 +202,19 @@ class AnthropicDecisionModel(RuleDecisionModel):
             raise
 
     async def make_plan(self, message: str, memory: str, previous: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+        # A named third-party API is a documentation question, not the mock platform path.
+        public_api = detect_public_api(message)
+        if public_api:
+            return {"kind": "public_api", "goal": f"查询 {public_api} 公开 API 文档",
+                    "tools": ["search_public_docs"]}
         fallback = await super().make_plan(message, memory, previous)
         try:
             result = await self._ask(
-                "根据问题生成可执行的多步计划。只允许 kind=auth/quota/webhook；对应工具分别是 "
+                "根据问题生成可执行的多步计划。只允许 kind=auth/quota/webhook/public_api；对应工具分别是 "
                 "auth:[search_api_docs,get_request_trace,inspect_key_scope], "
-                "quota:[search_api_docs,get_request_trace], webhook:[search_api_docs,get_webhook_delivery]。"
+                "quota:[search_api_docs,get_request_trace], webhook:[search_api_docs,get_webhook_delivery], "
+                "public_api:[search_public_docs]（用户询问公开 API 文档、错误码、限流或 Webhook 规范时使用；"
+                "提到 GitHub/Stripe/OpenAI/Twilio/Petstore 等第三方 API 时必须走 public_api，不要等待 request_id）。"
                 "先核验记录与文档，权限工具是否需要可依观察调整；"
                 "鉴权权限摘要必须在请求记录之后。"
                 "返回 {\"kind\":...,\"goal\":...,\"tools\":[...]}。"
@@ -249,9 +269,11 @@ class DeveloperAssistant:
     MAX_ACTIONS = 5
 
     def __init__(self, *, memory: Any, knowledge: Any, redis_client: Any, model: Any,
-                 tool_manager: MCPToolManager, sandbox_url: str, dynamic_scope: bool = True):
+                 tool_manager: MCPToolManager, sandbox_url: str, dynamic_scope: bool = True,
+                 public_knowledge: Any = None):
         self.memory = memory
         self.knowledge = knowledge
+        self.public_knowledge = public_knowledge
         self.redis = redis_client
         self.model = model
         self.tools = tool_manager
@@ -274,6 +296,12 @@ class DeveloperAssistant:
                 return results[:params.get("top_k", 3)]
             marker = titles[kind_match.group(1).lower()]
             return [item for item in results if marker.lower() in str(item.get("title", "")).lower()]
+
+        async def public_docs(params, _context):
+            if self.public_knowledge is None:
+                raise RuntimeError('公开文档知识库未配置')
+            return self.public_knowledge.search(
+                params["query"], api=params.get("api", ""), top_k=params.get("top_k", 4))
 
         async def sandbox_get(path: str):
             async with httpx.AsyncClient(timeout=10) as client:
@@ -310,6 +338,7 @@ class DeveloperAssistant:
             ("get_webhook_delivery", webhook, {"delivery_id": "string"}, ["delivery_id"], 0),
             ("get_related_request_trace", request, {"request_id": "string"}, ["request_id"], 0),
             ("search_quota_docs", docs, {"query": "string", "top_k": "integer"}, ["query"], 300),
+            ("search_public_docs", public_docs, {"query": "string", "api": "string", "top_k": "integer"}, ["query"], 0),
             ("create_support_ticket", ticket, {"issue_id": "string"}, ["issue_id"], 0),
         ]
         for name, handler, props, required, ttl in definitions:
@@ -592,7 +621,10 @@ class DeveloperAssistant:
             if linkage['assessment'] == 'correlated_unproven':
                 continue
             answer += "\n" + linkage['explanation'] + "。"
-        if "模拟平台" not in answer:
+        if state["kind"] == "public_api":
+            if "公开 API 文档" not in answer:
+                answer += "\n以上内容来自公开 API 文档摘要，不连接真实平台。"
+        elif "模拟平台" not in answer:
             answer += "\n以上基于本地模拟平台数据。"
         if state.get("model_fallback"):
             answer += "\n本轮模型决策未完成，计划或行动选择使用规则降级。"
@@ -646,6 +678,8 @@ class DeveloperAssistant:
             return f"查询失败：{error[:180]}"
         if tool in {"search_api_docs", "search_quota_docs"}:
             return f"找到 {len(data or [])} 个模拟平台文档片段"
+        if tool == "search_public_docs":
+            return f"找到 {len(data or [])} 条公开 API 文档摘要"
         if tool in {"get_request_trace", "get_related_request_trace"}:
             return f"HTTP {data.get('status')}；{_untrusted_text(data.get('error_summary'))}"
         if tool == "inspect_key_scope":

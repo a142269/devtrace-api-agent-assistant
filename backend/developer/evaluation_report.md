@@ -66,7 +66,7 @@ Vue 生产镜像此前使用 Node 20.20.2 构建通过。Playwright 实际打开
 
 ```text
 python -m unittest discover -s tests
-Ran 71 tests in 5.1s
+Ran 76 tests in 5.4s
 OK
 ```
 
@@ -160,6 +160,16 @@ Docker Desktop（Linux 容器）上使用当前 Dockerfile 与 `requirements.txt
 恢复模式平均少约 0.91 次重复文档检索（文档调用约少 44%），总工具调用约少 25%，两种模式诊断成功率相同。原始报告：[eval_memory_tasks_2026-10-18.json](eval_memory_tasks_2026-10-18.json)。
 
 局限：只衡量会话/计划复用，不衡量 ChromaDB 情景记忆质量、模型行为或生产延迟；12 条任务样本小；恢复模式在进程内的平均耗时反而更高（状态序列化开销），不能当作性能结论。
+
+## 公开 API 文档知识库（2026-10-18）
+
+新增面向真实公开 API 的文档问答路径：`backend/developer/public_docs.py` 内置 14 条带来源的官方文档摘要（GitHub、Stripe、OpenAI、Twilio、Petstore 与通用 HTTP 语义），每条记录 `api`、`title`、`content`、`source_url`、`license`、`updated`、`tags`。`PublicDocsKnowledge` 用 BM25 词法排序 + API 过滤检索；Agent 新增 `search_public_docs` 工具与 `public_api` 计划路径，答复中给出文档标题、来源链接和"公开文档摘要、不连接真实平台"的声明。
+
+- 路由：规则模式按 API 名识别；模型模式额外在服务端做确定性覆盖——消息提到 GitHub/Stripe/OpenAI/Twilio/Petstore 时强制走 `public_api`，不会误判成模拟平台 quota/auth 路径。
+- 规则模式评测：12 条公开 API 问题 **12/12 通过**，均计划完成、使用 `search_public_docs`、引用对应来源并带公开文档声明；见 [eval_public_docs_2026-10-18.json](eval_public_docs_2026-10-18.json)。
+- Docker + 真实模型 HTTP：问题"GitHub API 返回 403 rate limit，Retry-After 怎么处理"返回 `kind=public_api`、`plan=complete`、工具 `search_public_docs`、答复包含 `docs.github.com` 与公开文档声明；见 [eval_public_docs_http_2026-10-18.json](eval_public_docs_http_2026-10-18.json)。
+- 导入工具：`python -m developer.ingest_public_docs --source <OpenAPI.json|Markdown> --api <名称> --source-url <链接> --license <许可> --output <json>` 可把完整规格或自己的文档转换成同样结构；当前演示未导入大型厂商规格。
+- 局限：这些是**人工摘要并注明来源**，不是完整厂商文档；没有调用真实 API，也没有做真实故障注入；语料小、需手工维护；许可与归属信息已随条目记录，商业使用前需自行复核。
 
 ## 依赖安全检查（2026-10-18）
 

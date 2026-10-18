@@ -24,6 +24,7 @@ from core.skill_loader import SkillManager
 from developer.assistant import AnthropicDecisionModel, DeveloperAssistant, RuleDecisionModel
 from developer.data import DOCS
 from developer.events import event_sink
+from developer.public_knowledge import PublicDocsKnowledge
 from mcp.knowledge_base import KnowledgeBase
 from mcp.tool_manager import MCPToolManager
 from memory.conversation_memory import MemoryManager
@@ -210,6 +211,7 @@ async def lifespan(app: FastAPI):
         memory=memory, knowledge=knowledge, redis_client=memory._redis, model=model,
         tool_manager=MCPToolManager(api_key=key, base_url=base_url, model=model_name),
         sandbox_url=os.getenv("DEVELOPER_SANDBOX_URL", "http://developer-sandbox:8100"),
+        public_knowledge=PublicDocsKnowledge(),
     )
     heartbeat = None
     try:

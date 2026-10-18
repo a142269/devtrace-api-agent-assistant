@@ -4,6 +4,7 @@ from typing import Any, Dict
 
 TOOL_TITLES = {
     "search_api_docs": "检索对应版本的 API 文档",
+    "search_public_docs": "检索公开 API 文档摘要",
     "get_request_trace": "核对脱敏请求记录",
     "inspect_key_scope": "核对密钥状态与权限摘要",
     "get_webhook_delivery": "核对 Webhook 投递记录",
@@ -13,6 +14,7 @@ TOOL_TITLES = {
 }
 TOOL_EVIDENCE = {
     "search_api_docs": "匹配故障类型和 API 版本的文档片段",
+    "search_public_docs": "公开 API 文档摘要与来源链接",
     "get_request_trace": "request_id 对应的脱敏状态和错误摘要",
     "inspect_key_scope": "key_prefix 对应的状态与 scope 摘要",
     "get_webhook_delivery": "delivery_id 对应的状态、重试次数与错误摘要",
@@ -24,6 +26,7 @@ KIND_TO_TOOLS = {
     "auth": ["search_api_docs", "get_request_trace", "inspect_key_scope"],
     "quota": ["search_api_docs", "get_request_trace"],
     "webhook": ["search_api_docs", "get_webhook_delivery"],
+    "public_api": ["search_public_docs"],
 }
 TOOL_DEPENDENCIES = {"inspect_key_scope": {"get_request_trace"},
                      "get_related_request_trace": {"get_webhook_delivery"},
