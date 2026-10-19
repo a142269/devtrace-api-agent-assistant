@@ -2,15 +2,18 @@
 import hashlib
 import hmac
 import json
+import logging
 import os
 import time
+from typing import Optional
 
 import jwt
-from fastapi import HTTPException, Request
+from fastapi import Depends, HTTPException, Request
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 
 bearer = HTTPBearer(auto_error=False)
 ITERATIONS = 310_000
+logger = logging.getLogger(__name__)
 
 
 def password_hash(password: str, salt: str) -> str:
@@ -57,3 +60,25 @@ def authenticated_user(request: Request, credentials: HTTPAuthorizationCredentia
         return user
     except (jwt.PyJWTError, ValueError, KeyError):
         raise HTTPException(401, '登录凭证无效或已过期', headers={'WWW-Authenticate': 'Bearer'})
+
+
+def admin_names(users: dict) -> set:
+    """Server-side role: DEVTRACE_ADMIN_USERS ∩ configured users.
+
+    Names that are not real users are warned about and ignored; the role never
+    travels inside the JWT, so a token cannot claim admin by itself.
+    """
+    raw = os.getenv('DEVTRACE_ADMIN_USERS', '')
+    names = {item.strip() for item in raw.split(',') if item.strip()}
+    unknown = names - set(users)
+    if unknown:
+        logger.warning('DEVTRACE_ADMIN_USERS 中的未知用户已忽略: %s', ', '.join(sorted(unknown)))
+    return names & set(users)
+
+
+def require_admin(request: Request,
+                  credentials: Optional[HTTPAuthorizationCredentials] = Depends(bearer)) -> str:
+    user = authenticated_user(request, credentials)
+    if user not in admin_names(request.app.state.users):
+        raise HTTPException(403, '需要管理员权限')
+    return user
