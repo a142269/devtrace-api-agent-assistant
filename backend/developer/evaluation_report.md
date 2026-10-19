@@ -266,7 +266,20 @@ Agent 新增 `search_public_docs` 工具与 `public_api` 计划路径；模型�
 - 单元测试 `tests/test_task_queue.py`：成功完成、瞬时失败重试、重试后成功、失败进死信、取消、同会话去重、worker 重启回收、活 worker 任务不回收；
 - Docker + 真实模型 SSE：`started` → 14 个 `timeline` 事件 → `complete`，任务状态 `completed`，`GET /developer/tasks/{id}` 不泄露 payload；报告 [eval_queue_http_2026-10-18.json](eval_queue_http_2026-10-18.json)。
 
-局限：目前只验证单 worker；队列基于 Redis List，没有优先级/延迟队列/定时任务；worker 崩溃后正在执行的那一次会重试（可能重复工具副作用，工单幂等键可防重复），没有多 worker 分片与租约。同步 `/developer/chat` 仍是进程内执行。
+局限：目前只验证单 worker；队列基于 Redis List，没有优先级/延迟队列/定时任务；worker 崩溃后正在执行的那一次会重试（可能重复工具副作用，工单幂等键可防重复），没有多 worker 分片与租约。同步 `/developer/chat` 仍是进程内执行。（本节记录 P3 之前的状态；优先级、租约、延迟重试、死信重放与队列指标见下一节"队列生产化与可观测性"。）
+
+## 队列生产化与可观测性（2026-10-19，P3）
+
+只用 Redis，不引入 Celery/RabbitMQ/Kafka，不改前端、JWT 与 workspace 语义。
+
+- 单元测试：128 → **150 项通过**（新增 `tests/test_queue_production.py` 22 项；本机 `.dsh-venv` Python 3.10）。覆盖：三级优先级入队与未知优先级 `ValueError`、多键 `BRPOP` 的 high→normal→low→legacy 领取顺序、退避序列 1s/2s/4s 与 30s 上限、延迟任务到点后原子搬回**原优先级**队列、重试耗尽进死信、`process_one` 运行中写入并可观察租约、过期租约被回收（`attempts+1`、回到延迟队列、租约清空）、活租约不回收、无租约字段的旧记录不参与租约回收、`SET NX EX` 互斥锁让第二个 worker 不重复回收、`DEVTRACE_TASK_LEASE_SECONDS` 环境变量矩阵（非法值回落默认、低于下限取 30）、重放的 ok/状态不符/不存在三种结果、`task.finished` 审计携带 `trace_id`、自动生成的 trace 为 32 位十六进制；管理端点侧覆盖死信列表 200/403/401 与 `limit=201→422`、重放成功与失败审计、metrics 的队列/死信/延迟/心跳/状态计数、SSE `started` 事件的 trace 一致性、死信 error 字段二次脱敏且不含消息正文。旧测试 `tests/test_task_queue.py` 的 `QueueRedis` 补齐 `llen/lrem/zadd/zcard/zrangebyscore/zrem` 假实现，重启回收用例断言的队列键由 legacy 改为 `normal`（回收已按优先级路由），7 项旧用例语义不变、全部通过。
+- Docker HTTP 验证（本机 `devtrace-verify` 栈，API 18002，`--scale worker=2`；验证后 `.env` 已回滚、栈已 `down`，未使用 `down -v`）：
+  - 阶段 1（基础链路）18/18 通过：队列模式直发与流式任务完成、任务视图不泄露 `payload/user_id/lease_id/lease_until`、`GET /developer/dead-letter` 与 `GET /developer/metrics` 管理员 200。
+  - 阶段 2（租约与死信）16/18 通过：注入过期租约的 running 任务被另一 worker 回收→延迟→提升→完成，全程只执行一次、`attempts=1`、外部看不到租约字段；死信摘要字段齐全且疑似密钥被脱敏；重放 200 后任务重新排队并最终 `completed`，重复重放 409，审计同时存在成功与失败两条 `task.replayed`。两处未通过均为脚本判定问题、不是功能缺陷：① "领取顺序"断言在两个空闲 worker 场景失败——多键 `BRPOP` 会在某个键被写入的瞬间唤醒空闲消费者，严格优先级只在任务同时积压时成立（该边界已写入文档，并由阶段 3 用 worker=0 预排队做确定性验证）；② 重放成功审计的断言读取最新一条事件，命中的是紧随其后故意制造的 409 失败行，数据里两态都在。
+  - 阶段 3（严格优先级）5/5 通过：`--scale worker=0` 预排队 legacy/high/normal/low 后同时拉起 2 个 worker，完成顺序为 high → normal → low → legacy，8 个任务每个恰好执行一次。
+  - 回归：`verify_public_docs.py` 在同栈通过（HTTP 200、`kind=public_api`、计划 complete、命中公开文档来源与免责声明）。
+- 未验证 / 局限：租约回收靠**注入过期租约**验证，没有做 `kill -9` 打断正在执行任务的实测；新端点的非管理员 403 在 Docker 侧未单独造第二个普通账号复测（仅单元测试覆盖）；`/developer/metrics` 是 best-effort 单次快照，状态分布最多统计 500 条索引任务，worker 心跳键 TTL 90 秒，容器强制重建后旧心跳最长残留 90 秒（曾观测到 `workers: 3` 而实际 2 个）；重放对"不存在 / 不在死信 / 状态不是失败"统一返回 409，不区分原因（避免泄露存在性）；仍未做定时任务、任务取消接口、队列按 workspace/租户分区与告警面板；全部为本机演示验证，不构成生产就绪结论。
+
 
 ## 依赖安全检查（2026-10-18）
 
