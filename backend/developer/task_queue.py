@@ -6,17 +6,53 @@ allows retries / dead-letter handling for transient failures.
 """
 import hashlib
 import json
+import os
+import re
 import time
+import uuid
 
-QUEUE_KEY = 'developer:tasks:queue'
+QUEUE_KEY = 'developer:tasks:queue'          # legacy queue, drained last
 DEAD_KEY = 'developer:tasks:dead'
 INDEX_KEY = 'developer:tasks:queue-index'
+DELAY_KEY = 'developer:tasks:delayed'        # sorted set, score = due timestamp
+RECLAIM_PREFIX = 'developer:task-reclaim:'  # short mutex guarding lease reclaim
+PRIORITY_QUEUES = ('high', 'normal', 'low')
+DEFAULT_PRIORITY = 'normal'
 EVENTS_TTL_SECONDS = 86400
 MAX_ATTEMPTS = 2
+DEFAULT_LEASE_SECONDS = 90
+MIN_LEASE_SECONDS = 30
+MAX_BACKOFF_SECONDS = 30
+# Same secret shapes the audit layer masks; dead-letter summaries reuse them.
+_SECRET_VALUE = re.compile(
+    r'(?i)(sk-[A-Za-z0-9._\-]{4,}|whsec_[A-Za-z0-9_\-]{4,}|Bearer\s+[A-Za-z0-9._\-]+)')
 
 
 def task_key(task_id: str) -> str:
     return f'developer:task:{task_id}'
+
+
+def priority_queue_key(priority: str) -> str:
+    return f'{QUEUE_KEY}:{priority}'
+
+
+# Consumption order for the worker: strict priority first, legacy last so that
+# tasks enqueued before the priority upgrade are never stranded.
+QUEUE_ORDER = tuple(priority_queue_key(p) for p in PRIORITY_QUEUES) + (QUEUE_KEY,)
+
+
+def lease_seconds() -> int:
+    """Configurable per-task lease; never shorter than MIN_LEASE_SECONDS."""
+    try:
+        value = int(os.getenv('DEVTRACE_TASK_LEASE_SECONDS', str(DEFAULT_LEASE_SECONDS)))
+    except ValueError:
+        return DEFAULT_LEASE_SECONDS
+    return max(MIN_LEASE_SECONDS, value)
+
+
+def backoff_seconds(attempts: int) -> int:
+    """Exponential retry delay (1s, 2s, 4s, ...) capped at MAX_BACKOFF_SECONDS."""
+    return min(2 ** max(0, int(attempts) - 1), MAX_BACKOFF_SECONDS)
 
 
 def events_key(task_id: str) -> str:
@@ -58,22 +94,39 @@ async def update_task(redis, task_id: str, **fields) -> dict:
     return record
 
 
+async def _push_queue(redis, task_id: str, priority: str = DEFAULT_PRIORITY) -> None:
+    await redis.lpush(priority_queue_key(priority), task_id)
+
+
+async def _requeue_push(redis, task_id: str, record: dict) -> None:
+    """Route a re-queued task to its priority queue; legacy tasks keep the old key."""
+    priority = (record or {}).get('priority')
+    if priority in PRIORITY_QUEUES:
+        await _push_queue(redis, task_id, priority)
+    else:
+        await redis.lpush(QUEUE_KEY, task_id)
+
+
 async def enqueue(redis, task_id: str, user_id: str, message: str,
-                  conversation_id: str, workspace: str = 'default') -> dict:
+                  conversation_id: str, workspace: str = 'default',
+                  priority: str = DEFAULT_PRIORITY, trace_id: str = '') -> dict:
+    if priority not in PRIORITY_QUEUES:
+        raise ValueError(f'Unknown task priority: {priority}')
     record = {
         'task_id': task_id, 'user_id': user_id, 'status': 'queued',
         'attempts': 0, 'created_at': time.time(), 'updated_at': time.time(),
         'run_id': None, 'cancel_requested': False,
         'workspace': workspace or 'default',
+        'priority': priority, 'trace_id': trace_id or uuid.uuid4().hex,
         'payload': {'message': message, 'conversation_id': conversation_id},
     }
     await save_task(redis, task_id, record)
-    await redis.lpush(QUEUE_KEY, task_id)
+    await _push_queue(redis, task_id, priority)
     return record
 
 
 async def claim(redis, timeout: int = 5):
-    item = await redis.brpop(QUEUE_KEY, timeout=timeout)
+    item = await redis.brpop(list(QUEUE_ORDER), timeout=timeout)
     if not item:
         return None
     return _text(item[1])
@@ -106,20 +159,134 @@ async def request_cancel(redis, task_id: str) -> None:
 
 
 async def requeue_or_fail(redis, task_id: str, error: str) -> str:
+    """Retry with exponential backoff via the delayed ZSET, or dead-letter.
+
+    Returns 'queued' while a retry is pending (the task is only in the ZSET,
+    never in a ready queue until `promote_delayed` moves it) and 'failed' once
+    the attempt budget is exhausted.
+    """
     record = await get_task(redis, task_id) or {'task_id': task_id}
     attempts = int(record.get('attempts') or 0) + 1
     record['attempts'] = attempts
     record['error'] = error[:500]
+    record['lease_id'] = None
+    record['lease_until'] = None
     if attempts < MAX_ATTEMPTS:
         record['status'] = 'queued'
         await save_task(redis, task_id, record)
-        await redis.lpush(QUEUE_KEY, task_id)
+        await redis.zadd(DELAY_KEY, {task_id: time.time() + backoff_seconds(attempts)})
         return 'queued'
     record['status'] = 'failed'
     record['finished_at'] = time.time()
     await save_task(redis, task_id, record)
+    await redis.zrem(DELAY_KEY, task_id)
     await redis.rpush(DEAD_KEY, task_id)
     return 'failed'
+
+
+async def promote_delayed(redis, now: float | None = None) -> int:
+    """Move due delayed tasks back into their priority queue.
+
+    ``ZREM`` is the atomic claim: when two workers promote the same task, only
+    the one that removes it from the ZSET re-queues it.
+    """
+    due = await redis.zrangebyscore(DELAY_KEY, '-inf', time.time() if now is None else now)
+    promoted = 0
+    for raw in due:
+        task_id = _text(raw)
+        if not await redis.zrem(DELAY_KEY, task_id):
+            continue
+        record = await get_task(redis, task_id)
+        if not record or record.get('status') != 'queued':
+            continue
+        await _requeue_push(redis, task_id, record)
+        promoted += 1
+    return promoted
+
+
+async def reclaim_expired(redis, now: float | None = None) -> int:
+    """Requeue running tasks whose lease lapsed (the owning worker crashed).
+
+    Tasks without a lease field keep the pre-P3 startup-recovery semantics, and
+    a short ``SET NX`` mutex guarantees only one worker requeues a given task.
+    """
+    current = time.time() if now is None else now
+    reclaimed = 0
+    for raw in list(await redis.smembers(INDEX_KEY)):
+        task_id = _text(raw)
+        record = await get_task(redis, task_id)
+        if not record or record.get('status') != 'running':
+            continue
+        lease_until = record.get('lease_until')
+        if not isinstance(lease_until, (int, float)) or lease_until > current:
+            continue
+        mutex = f'{RECLAIM_PREFIX}{task_id}'
+        if not await redis.set(mutex, task_id, nx=True, ex=30):
+            continue
+        record = await get_task(redis, task_id)
+        lease_until = (record or {}).get('lease_until')
+        if (not record or record.get('status') != 'running'
+                or not isinstance(lease_until, (int, float)) or lease_until > current):
+            await redis.delete(mutex)
+            continue
+        await requeue_or_fail(redis, task_id, '租约过期，任务已被其他 worker 回收')
+        reclaimed += 1
+    return reclaimed
+
+
+async def replay(redis, task_id: str):
+    """Re-arm a dead-lettered task. Returns (result, record).
+
+    'ok' - reset and re-queued; 'not_found' - dead entry with no live record;
+    'not_failed' - the record is not a failed task.
+    """
+    record = await get_task(redis, task_id)
+    if not record or record.get('status') != 'failed':
+        return ('not_found' if not record else 'not_failed'), record
+    if not await redis.lrem(DEAD_KEY, 1, task_id):
+        return 'not_in_dead', record
+    record['attempts'] = 0
+    record['error'] = None
+    record['status'] = 'queued'
+    record['lease_id'] = None
+    record['lease_until'] = None
+    record['finished_at'] = None
+    await save_task(redis, task_id, record)
+    await _requeue_push(redis, task_id, record)
+    return 'ok', record
+
+
+async def read_dead(redis, limit: int):
+    """Dead-letter summaries, oldest first; missing records stay visible."""
+    rows = []
+    for raw in await redis.lrange(DEAD_KEY, 0, max(0, limit) - 1):
+        task_id = _text(raw)
+        record = await get_task(redis, task_id) or {}
+        rows.append({'task_id': task_id,
+                     'status': record.get('status') or 'failed',
+                     'attempts': record.get('attempts'),
+                     'error': _SECRET_VALUE.sub('<redacted>', str(record.get('error') or ''))[:200],
+                     'workspace': str(record.get('workspace') or 'default'),
+                     'priority': record.get('priority') or '',
+                     'trace_id': record.get('trace_id') or ''})
+    return rows
+
+
+async def queue_metrics(redis, status_cap: int = 500) -> dict:
+    """Bounded queue snapshot: list lengths plus per-status counts of indexed tasks."""
+    queues = {p: await redis.llen(priority_queue_key(p)) for p in PRIORITY_QUEUES}
+    members = list(await redis.smembers(INDEX_KEY))[:status_cap]
+    statuses: dict[str, int] = {}
+    for raw in members:
+        record = await get_task(redis, _text(raw))
+        status = (record or {}).get('status') or 'missing'
+        statuses[status] = statuses.get(status, 0) + 1
+    return {'queues': queues,
+            'legacy': await redis.llen(QUEUE_KEY),
+            'delayed': await redis.zcard(DELAY_KEY),
+            'dead': await redis.llen(DEAD_KEY),
+            'indexed': len(members),
+            'statuses': statuses}
 
 
 async def recover_running_tasks(redis, is_worker_alive) -> int:
@@ -149,8 +316,10 @@ async def recover_running_tasks(redis, is_worker_alive) -> int:
         record['error'] = 'worker 在执行中退出，任务已重新入队'
         if attempts < MAX_ATTEMPTS:
             record['status'] = 'queued'
+            record['lease_id'] = None
+            record['lease_until'] = None
             await save_task(redis, task_id, record)
-            await redis.lpush(QUEUE_KEY, task_id)
+            await _requeue_push(redis, task_id, record)
         else:
             record['status'] = 'failed'
             record['finished_at'] = time.time()

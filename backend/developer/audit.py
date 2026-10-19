@@ -36,6 +36,9 @@ remote_var: contextvars.ContextVar[str] = contextvars.ContextVar('devtrace_remot
 # events raised deep inside a run carry the owning workspace without threading
 # the value through every signature.
 workspace_var: contextvars.ContextVar[str] = contextvars.ContextVar('devtrace_workspace', default='')
+# Generated at enqueue and carried through the worker and stream events so one
+# task can be traced across queue, execution and audit records.
+trace_id_var: contextvars.ContextVar[str] = contextvars.ContextVar('devtrace_trace_id', default='')
 
 
 def _clean(value: Any, limit: int = DETAIL_LIMIT) -> str:
@@ -59,7 +62,7 @@ def sanitize_detail(detail: Optional[Dict[str, Any]]) -> Dict[str, Any]:
 
 async def record(redis: Any, event: str, *, actor: str = '', resource: str = '',
                  status: str = '', request_id: Optional[str] = None, remote: str = '',
-                 workspace: Optional[str] = None,
+                 workspace: Optional[str] = None, trace_id: Optional[str] = None,
                  detail: Optional[Dict[str, Any]] = None) -> None:
     """Append one audit event. Never raises: failures are logged and ignored."""
     xadd = getattr(redis, 'xadd', None)
@@ -74,6 +77,7 @@ async def record(redis: Any, event: str, *, actor: str = '', resource: str = '',
         'request_id': _clean(request_id if request_id is not None else request_id_var.get(), 64),
         'remote': _clean(remote if remote else remote_var.get(), 64),
         'workspace': _clean(workspace if workspace is not None else workspace_var.get(), 40),
+        'trace_id': _clean(trace_id if trace_id is not None else trace_id_var.get(), 64),
         'detail': json.dumps(sanitize_detail(detail), ensure_ascii=False, sort_keys=True),
     }
     try:
@@ -90,7 +94,8 @@ def _entry(entry_id: Any, values: Dict[Any, Any]) -> Dict[str, Any]:
     row = {'id': _decode(entry_id)}
     for key, value in (values or {}).items():
         row[_decode(key)] = _decode(value)
-    for key in ('ts', 'event', 'actor', 'resource', 'status', 'request_id', 'remote', 'workspace'):
+    for key in ('ts', 'event', 'actor', 'resource', 'status', 'request_id', 'remote',
+                'workspace', 'trace_id'):
         row.setdefault(key, '')
     # Events written before workspace tagging existed belong to the default workspace.
     if not row['workspace']:

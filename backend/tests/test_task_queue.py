@@ -13,6 +13,7 @@ class QueueRedis:
         self.values = {}
         self.lists = {}
         self.sets = {}
+        self.zsets = {}
 
     async def get(self, key):
         return self.values.get(key)
@@ -48,17 +49,45 @@ class QueueRedis:
     async def rpush(self, key, value):
         self.lists.setdefault(key, []).append(value)
 
+    async def llen(self, key):
+        return len(self.lists.get(key, []))
+
+    async def lrem(self, key, _count, value):
+        rows = self.lists.get(key, [])
+        if value in rows:
+            rows.remove(value)
+            return 1
+        return 0
+
     async def lrange(self, key, start, end):
         rows = self.lists.get(key, [])
         if end == -1:
             return rows[start:]
         return rows[start:end + 1]
 
-    async def brpop(self, key, timeout=0):
-        rows = self.lists.get(key, [])
-        if not rows:
-            return None
-        return key, rows.pop()
+    async def brpop(self, keys, timeout=0):
+        queue = [keys] if isinstance(keys, str) else list(keys)
+        for key in queue:
+            rows = self.lists.get(key, [])
+            if rows:
+                return key, rows.pop()
+        return None
+
+    async def zadd(self, key, mapping):
+        self.zsets.setdefault(key, {}).update(mapping)
+        return len(mapping)
+
+    async def zcard(self, key):
+        return len(self.zsets.get(key, {}))
+
+    async def zrangebyscore(self, key, low, high):
+        scores = self.zsets.get(key, {})
+        low = float('-inf') if low == '-inf' else float(low)
+        high = float('inf') if high == '+inf' else float(high)
+        return [m for m, s in sorted(scores.items(), key=lambda kv: kv[1]) if low <= s <= high]
+
+    async def zrem(self, key, member):
+        return 1 if self.zsets.get(key, {}).pop(member, None) is not None else 0
 
 
 class FakeAssistant:
@@ -148,7 +177,9 @@ class TaskQueueTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_recover_running_task_from_dead_worker(self):
         await self.enqueue('t7', 'alice', 'c7')
-        self.redis.lists.setdefault(task_queue.QUEUE_KEY, []).clear()
+        # Enqueue put t7 in the default (normal) priority queue; remove it so the
+        # recovery re-queue is observable.
+        self.redis.lists.setdefault(task_queue.priority_queue_key('normal'), []).clear()
         await task_queue.update_task(self.redis, 't7', status='running', worker_id='dead-worker')
 
         async def dead(_redis, _worker):
@@ -159,7 +190,7 @@ class TaskQueueTests(unittest.IsolatedAsyncioTestCase):
         record = await task_queue.get_task(self.redis, 't7')
         self.assertEqual(record['status'], 'queued')
         self.assertEqual(record['attempts'], 1)
-        self.assertIn('t7', self.redis.lists[task_queue.QUEUE_KEY])
+        self.assertIn('t7', self.redis.lists[task_queue.priority_queue_key('normal')])
 
     async def test_recover_does_not_touch_a_live_worker_task(self):
         await self.enqueue('t8', 'alice', 'c8')
