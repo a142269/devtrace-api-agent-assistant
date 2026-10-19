@@ -272,3 +272,9 @@ Agent 新增 `search_public_docs` 工具与 `public_api` 计划路径；模型�
 
 `pip-audit` 与 OSV 核查确认 `chromadb==0.5.23` 有 3 条漏洞（1 CRITICAL 代码注入、2 HIGH 跨租户授权），OSV 的受影响范围到 `1.5.9`（当前最新版），**没有修复版本**。处置为不升级（升级不能修复且迁移风险大）、保持 ChromaDB 仅在 Compose 内部网络、明确单租户演示边界，并在 CI 增加审计门禁（只阻断已有修复版本的漏洞）。新增回归测试覆盖内部服务不发布端口、`.env` 不进 Git/镜像、镜像非 root 等部署约束。完整评估见 [依赖与安全评估_2026-10-18.md](依赖与安全评估_2026-10-18.md)。本机重跑 `pip-audit` 时 PyPI JSON 请求停滞，完整扫描沿用 2026-10-17 的 91 依赖报告（仅这 3 条）并以 OSV 官方数据核对。
 
+## RBAC 与审计日志（2026-10-19）
+
+- 单元测试：107 → **115 项通过**（新增 `tests/test_audit.py` 8 项；本机 `.dsh-venv` Python 3.10）。覆盖：管理员 200 / 非管理员 403 / 匿名 401 / `DEVTRACE_ADMIN_USERS` 为空时全员 403；登录成功与失败事件不含密码；`chat.sync` 事件不含消息正文（detail 仅 `kind`/`latency_ms`）；fake Redis `xadd` 抛异常与无 stream 客户端两种情况 chat 仍 200；bytes decode、`user`/`event` 过滤、最新优先、`limit=0/201/abc` 拒绝 422；`detail` 白名单外键丢弃、`sk-`/`Bearer ` 替换 `<redacted>`、200 字符截断；真实 `DeveloperAssistant` 规则模式跑 `req_auth_01` 每条工具调用写一条 `tool.call` 且不含观察载荷；`api/worker.py` 的 `process_one` 写 `task.finished`。
+- Docker HTTP 验证（本机 `devtrace-verify` 栈，API 18002）：管理员（demo）读 `GET /developer/audit` **200**，非管理员（本机临时 guest 用户）**403**，匿名 **401**，`limit=500` **422**；`X-Request-ID: p1-audit-verify-01` 回写响应头并出现在 `chat.sync` 事件的 `request_id`；直发 chat + 队列 SSE 后 26 条事件覆盖 `auth.login.success/failure`、`chat.sync`、`tool.call`、`task.enqueued`、`task.finished`、`memory.export`、`prompts.read`、`audit.read`；对整份响应检索：不含两个口令、不含 `Bearer`、不含 `sk-`。回归：`verify_queue.py` 队列 SSE 全链路通过。报告在工作区根目录 `eval_audit_docker_2026-10-19.json`（本机文件，不入库）。
+- 局限：单租户；"append-only"是应用层只追加（Redis 可被运维删改，非 WORM），流按 `maxlen≈10000` 近似裁剪；角色仅管理员/普通两档；评测样本为本机验证，非第三方审计基准。
+
