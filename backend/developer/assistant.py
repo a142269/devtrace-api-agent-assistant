@@ -15,6 +15,7 @@ from typing import Any, Dict, Optional
 import httpx
 from anthropic import AsyncAnthropic
 
+from mcp.runtime import search_platform_docs
 from mcp.tool_manager import MCPToolManager, Tool
 from memory.conversation_memory import MsgRole
 
@@ -23,9 +24,10 @@ model_metrics = contextvars.ContextVar('developer_model_metrics', default=None)
 
 from developer.error_playbooks import lookup_playbook
 from developer import audit
-from developer.planner import (KIND_TO_TOOLS, PUBLIC_API_MCP_TOOLS, TOOL_EVIDENCE, TOOL_SCHEMAS,
-                               TOOL_TITLES, _approved_tools, _ready_steps,
-                               build_plan_candidates, choose_plan_candidate)
+from developer.planner import (KIND_TO_TOOLS, MCP_READ_TOOLS, MCP_ROUTED_KINDS,
+                               PUBLIC_API_MCP_TOOLS, TOOL_EVIDENCE, TOOL_SCHEMAS, TOOL_TITLES,
+                               _approved_tools, _ready_steps, base_tool, build_plan_candidates,
+                               choose_plan_candidate, mcp_name)
 from developer.public_docs import detect_public_api
 from developer.prompts import PROMPT_VERSION, render
 from developer.security import scan_observation, scan_untrusted, tainted_sources
@@ -113,15 +115,13 @@ class RuleDecisionModel:
             "search_api_docs": {"query": f"{state.get('api_version', 'v1')} {state['kind']} {message[:100]}", "top_k": 3},
             "search_public_docs": {"query": message[:300], "api": detect_public_api(message)},
             "lookup_error_playbook": playbook_args,
-            "mcp_search_public_docs": {"query": message[:300], "api": detect_public_api(message)},
-            "mcp_lookup_error_playbook": playbook_args,
             "get_request_trace": {"request_id": issue_id},
             "inspect_key_scope": {"key_prefix": state.get("key_prefix", "")},
             "get_webhook_delivery": {"delivery_id": issue_id},
             "get_related_request_trace": {"request_id": state.get("related_request_id", "")},
             "search_quota_docs": {"query": "v1 quota 429", "top_k": 3},
             "create_support_ticket": {"issue_id": issue_id},
-        }[tool]
+        }[base_tool(tool)]
         return {"action": "tool", "step_id": pending["id"], "tool": tool, "args": args}
 
     async def revise_plan(self, state: Dict[str, Any], failed_tool: str) -> Dict[str, Any]:
@@ -134,28 +134,30 @@ class RuleDecisionModel:
         lines = []
         for item in observations:
             data = item.get("result")
-            if item["tool"] in {"search_api_docs", "search_quota_docs"} and isinstance(data, list):
+            # Evidence text is keyed by base name so an MCP-routed step reads the same.
+            tool = base_tool(item["tool"])
+            if tool in {"search_api_docs", "search_quota_docs"} and isinstance(data, list):
                 titles = [str(doc.get("title")) for doc in data if isinstance(doc, dict) and doc.get("title")]
                 if titles:
                     lines.append("已核对模拟平台文档：" + "、".join(titles) + "。")
-            elif item["tool"] == "get_request_trace" and isinstance(data, dict):
+            elif tool == "get_request_trace" and isinstance(data, dict):
                 lines.append(f"请求 {data.get('request_id')} 返回 {data.get('status')}：{_untrusted_text(data.get('error_summary'))}。")
                 if data.get("retry_after_seconds") is not None:
                     lines.append(f"请等待 Retry-After {data['retry_after_seconds']} 秒后再重试。")
-            elif item["tool"] == "get_related_request_trace" and isinstance(data, dict):
+            elif tool == "get_related_request_trace" and isinstance(data, dict):
                 lines.append(f"关联请求 {data.get('request_id')} 返回 {data.get('status')}：{_untrusted_text(data.get('error_summary'))}。")
-            elif item["tool"] == "inspect_key_scope" and isinstance(data, dict):
+            elif tool == "inspect_key_scope" and isinstance(data, dict):
                 lines.append(f"密钥前缀 {data.get('key_prefix')} 的状态为 {data.get('status')}，scope 为 {', '.join(data.get('scopes', []))}。")
-            elif item["tool"] == "get_webhook_delivery" and isinstance(data, dict):
+            elif tool == "get_webhook_delivery" and isinstance(data, dict):
                 lines.append(f"投递 {data.get('delivery_id')} 返回 {data.get('status')}：{_untrusted_text(data.get('error_summary'))}。")
-            elif item["tool"] == "create_support_ticket" and isinstance(data, dict):
+            elif tool == "create_support_ticket" and isinstance(data, dict):
                 lines.append(f"已创建模拟工单 {data.get('ticket_id')}。")
-            elif item["tool"] in {"search_public_docs", "mcp_search_public_docs"} and isinstance(data, list):
+            elif tool == "search_public_docs" and isinstance(data, list):
                 for doc in data[:3]:
                     if isinstance(doc, dict):
                         lines.append(
                             f"参考公开文档《{doc.get('title')}》（{doc.get('source_url')}）：{doc.get('content')}")
-            elif item["tool"] in {"lookup_error_playbook", "mcp_lookup_error_playbook"} and isinstance(data, list):
+            elif tool == "lookup_error_playbook" and isinstance(data, list):
                 for entry in data[:2]:
                     if not isinstance(entry, dict):
                         continue
@@ -166,9 +168,9 @@ class RuleDecisionModel:
                         lines.append(f"退避策略：{entry['retry_policy']}。")
                     if entry.get("recovery"):
                         lines.append("处理建议：" + "；".join(entry["recovery"]) + "。")
-        delivery = next((a['result'] for a in observations if a['tool'] == 'get_webhook_delivery'
+        delivery = next((a['result'] for a in observations if base_tool(a['tool']) == 'get_webhook_delivery'
                          and isinstance(a.get('result'), dict)), None)
-        related = next((a['result'] for a in observations if a['tool'] == 'get_related_request_trace'
+        related = next((a['result'] for a in observations if base_tool(a['tool']) == 'get_related_request_trace'
                         and isinstance(a.get('result'), dict)), None)
         if delivery and related and delivery.get('status') == 503 and related.get('status') == 429:
             lines.append('建议先检查 Webhook 接收端可用性，同时按关联请求记录的等待时间控制重试；'
@@ -326,9 +328,7 @@ class AnthropicDecisionModel(RuleDecisionModel):
                 # The model may omit required fields; fall back to the rule-built args
                 # instead of executing a call that is guaranteed to fail validation.
                 required = {"lookup_error_playbook": {"symptom"},
-                            "mcp_lookup_error_playbook": {"symptom"},
-                            "search_public_docs": {"query"},
-                            "mcp_search_public_docs": {"query"}}.get(selected["tool"], set())
+                            "search_public_docs": {"query"}}.get(base_tool(selected["tool"]), set())
                 if required.issubset(result["args"]):
                     return result
                 fallback = await super().choose_action(state, message)
@@ -357,12 +357,14 @@ class DeveloperAssistant:
     def __init__(self, *, memory: Any, knowledge: Any, redis_client: Any, model: Any,
                  tool_manager: MCPToolManager, sandbox_url: str, dynamic_scope: bool = True,
                  public_knowledge: Any = None, mcp_client: Any = None,
-                 mcp_public_tools: bool = False, planning_candidates: bool = False):
+                 mcp_public_tools: bool = False, mcp_all_tools: bool = False,
+                 planning_candidates: bool = False):
         self.memory = memory
         self.knowledge = knowledge
         self.public_knowledge = public_knowledge
         self.mcp_client = mcp_client
         self.mcp_public_tools = bool(mcp_public_tools and mcp_client is not None)
+        self.mcp_all_tools = bool(mcp_all_tools and mcp_client is not None)
         self.planning_candidates = bool(planning_candidates)
         self.redis = redis_client
         self.model = model
@@ -373,19 +375,8 @@ class DeveloperAssistant:
 
     def _register_tools(self) -> None:
         async def docs(params, _context):
-            query = params["query"]
-            version_match = re.match(r'^(v[12])\b', query, re.I)
-            version = version_match.group(1).lower() if version_match else 'v1'
-            if hasattr(self.knowledge, 'search_hybrid_async'):
-                results = await self.knowledge.search_hybrid_async(query, top_k=4, version=version)
-            else:
-                results = await self.knowledge.search_async(query, top_k=4)
-            kind_match = re.match(r"^v[12]\s+(auth|quota|webhook)\b", query, re.I)
-            titles = {"auth": "鉴权", "quota": "速率限制", "webhook": "Webhook"}
-            if not kind_match:
-                return results[:params.get("top_k", 3)]
-            marker = titles[kind_match.group(1).lower()]
-            return [item for item in results if marker.lower() in str(item.get("title", "")).lower()]
+            return await search_platform_docs(self.knowledge, params["query"],
+                                              params.get("top_k", 3))
 
         async def public_docs(params, _context):
             if self.public_knowledge is None:
@@ -467,6 +458,31 @@ class DeveloperAssistant:
                         "required": required, "additionalProperties": False},
                 cache_ttl=ttl, timeout_s=12,
             ))
+        if self.mcp_all_tools:
+            self._register_mcp_read_tools()
+
+    def _register_mcp_read_tools(self) -> None:
+        """Register the ``mcp_*`` twins of the read tools, served over the MCP client.
+
+        Only declared read-only fields are forwarded. A failed MCP call is recorded as
+        a failed step rather than silently retried on the local tool, so the audit
+        shows the transport that was actually used.
+        """
+        def mcp_handler(tool_name: str, fields: tuple):
+            async def handler(params, _context):
+                arguments = {field: params[field] for field in fields if params.get(field) not in (None, "")}
+                return await self.mcp_client.call_tool(tool_name, arguments)
+            return handler
+
+        docs_tools = {"search_api_docs", "search_quota_docs"}
+        for base in MCP_READ_TOOLS:
+            name = mcp_name(base)
+            schema = TOOL_SCHEMAS[name]
+            self.tools.register(Tool(
+                name=name, description=TOOL_TITLES[name],
+                handler=mcp_handler(base, tuple(schema["properties"])),
+                schema=schema, cache_ttl=300 if base in docs_tools else 0, timeout_s=12,
+            ))
 
     @staticmethod
     def _state_key(user_id: str, conversation_id: str) -> str:
@@ -503,12 +519,17 @@ class DeveloperAssistant:
             plan = await self.model.make_plan(message, memory_text, None)
             kind = (_kind(message, issue_id) if issue_id else
                     plan.get("kind") if plan.get("kind") in KIND_TO_TOOLS else _kind(message))
-            allowed_override = (PUBLIC_API_MCP_TOOLS
-                                if self.mcp_public_tools and kind == 'public_api' else None)
+            allowed_override = None
+            if self.mcp_public_tools and kind == 'public_api':
+                allowed_override = PUBLIC_API_MCP_TOOLS
+            elif self.mcp_all_tools and kind in MCP_ROUTED_KINDS:
+                allowed_override = [mcp_name(tool) for tool in KIND_TO_TOOLS[kind]]
             proposed, chosen, adjustments = _approved_tools(kind, plan.get("tools"), allowed_override)
-            if issue_id.startswith('req_auth_v2_') and 'get_request_trace' in chosen and 'search_api_docs' in chosen:
-                chosen.remove('get_request_trace')
-                chosen.insert(0, 'get_request_trace')
+            chosen_bases = [base_tool(tool) for tool in chosen]
+            if issue_id.startswith('req_auth_v2_') and 'get_request_trace' in chosen_bases \
+                    and 'search_api_docs' in chosen_bases:
+                tool = chosen.pop(chosen_bases.index('get_request_trace'))
+                chosen.insert(0, tool)
                 adjustments.append('先核验请求记录中的 API 版本，再检索对应文档')
             if plan.get("kind") != kind:
                 adjustments.append("根据用户提供的问题标识修正故障类型")
@@ -579,6 +600,13 @@ class DeveloperAssistant:
         ticket_requested = state.get("ticket_authorized", False)
         question = ""
         actions_this_turn = 0
+
+        def _variant(base_name: str) -> str:
+            """Keep a dynamically appended step on the transport the plan already uses."""
+            routed = any(step["tool"] != base_tool(step["tool"])
+                         and base_tool(step["tool"]) in MCP_READ_TOOLS for step in state["steps"])
+            return mcp_name(base_name) if routed else base_name
+
         while actions_this_turn < self.MAX_ACTIONS:
             # A checkpoint represents a resumable state if a worker or stream
             # stops before the next step is recorded. Ticket creation has its
@@ -592,12 +620,13 @@ class DeveloperAssistant:
             ready = _ready_steps(state)
             if not ready:
                 blocked = pending_steps[0]
+                blocked_base = base_tool(blocked["tool"])
                 blocked["status"] = "waiting"
-                if blocked["tool"] == "create_support_ticket" and not ticket_requested:
+                if blocked_base == "create_support_ticket" and not ticket_requested:
                     question = "如需创建模拟支持工单，请明确回复“创建工单”。"
                 elif not state["issue_id"]:
                     question = "请提供模拟平台的 request_id（如 req_auth_01）或 delivery_id（如 delivery_01）。"
-                elif blocked["tool"] == "inspect_key_scope" and not state.get("key_prefix"):
+                elif blocked_base == "inspect_key_scope" and not state.get("key_prefix"):
                     question = "还需要密钥前缀才能核对权限，请提供脱敏 key_prefix。"
                 else:
                     question = "仍缺少可核验的证据，请核对问题标识后继续。"
@@ -618,22 +647,25 @@ class DeveloperAssistant:
                 question = "模型未选择可执行步骤，请发送“继续”重试。"
                 break
             tool = pending["tool"]
+            base = base_tool(tool)
             state["timeline"].append({"type": "selection", "text": f"选择 {pending['id']}：{TOOL_TITLES[tool]}", "step_id": pending["id"]})
             args = decision.get("args") if isinstance(decision.get("args"), dict) else {}
             # Identifiers come from observed records or user input, never solely from the model.
-            if tool == "get_request_trace":
+            # The MCP twins take the same server-derived arguments; nothing here is sent
+            # to the MCP server beyond the read-only fields its schema declares.
+            if base == "get_request_trace":
                 args = {"request_id": state["issue_id"]}
-            elif tool == "get_related_request_trace":
+            elif base == "get_related_request_trace":
                 args = {"request_id": state["related_request_id"]}
-            elif tool == "search_quota_docs":
+            elif base == "search_quota_docs":
                 args = {"query": "v1 quota 429", "top_k": 3}
-            elif tool == "get_webhook_delivery":
+            elif base == "get_webhook_delivery":
                 args = {"delivery_id": state["issue_id"]}
-            elif tool == "inspect_key_scope":
+            elif base == "inspect_key_scope":
                 args = {"key_prefix": state["key_prefix"]}
-            elif tool == "create_support_ticket":
+            elif base == "create_support_ticket":
                 args = {"issue_id": state["issue_id"]}
-            elif tool == "search_api_docs":
+            elif base == "search_api_docs":
                 args = {"query": f"{state.get('api_version', 'v1')} {state['kind']} {message[:120]}", "top_k": 3}
             context = {
                 "user_id": user_id, "conversation_id": conversation_id,
@@ -641,7 +673,8 @@ class DeveloperAssistant:
                 "summary": f"{state['goal']}；已核验来源：{', '.join(state['evidence'])}"[:1000],
             }
             state["timeline"].append({"type": "action", "text": f"开始：{TOOL_TITLES[tool]}", "step_id": pending["id"]})
-            result = await self.tools.call(tool, args, context=context, use_cache=(tool in {"search_api_docs", "search_quota_docs"}))
+            result = await self.tools.call(tool, args, context=context,
+                                           use_cache=base in {"search_api_docs", "search_quota_docs"})
             actions_this_turn += 1
             data = result.data if result.success else None
             source = f"{tool}:{args.get('request_id') or args.get('delivery_id') or args.get('key_prefix') or state.get('api_version', 'v1')}"
@@ -670,54 +703,57 @@ class DeveloperAssistant:
             state["timeline"].append({"type": "status", "text": f"{pending['id']} → {pending['status']}", "step_id": pending["id"]})
             if pending["status"] == "done":
                 state["evidence"].append(source)
-                if tool in {"search_api_docs", "search_quota_docs"}:
+                if base in {"search_api_docs", "search_quota_docs"}:
                     state["evidence"].extend(
                         f"doc:{doc['title']}" for doc in data
                         if isinstance(doc, dict) and doc.get("title")
                     )
-                if tool == 'get_webhook_delivery' and isinstance(data, dict):
+                if base == 'get_webhook_delivery' and isinstance(data, dict):
                     related = data.get('related_request_id', '')
                     if isinstance(related, str) and re.fullmatch(r'req_[A-Za-z0-9_-]+', related):
                         state['related_request_id'] = related
-                        if not any(item['tool'] == 'get_related_request_trace' for item in state['steps']):
+                        if not any(base_tool(item['tool']) == 'get_related_request_trace' for item in state['steps']):
+                            related_step = _variant('get_related_request_trace')
                             state['steps'].append({'id': f"s{len(state['steps']) + 1}",
-                                'title': TOOL_TITLES['get_related_request_trace'], 'tool': 'get_related_request_trace',
-                                'required_evidence': TOOL_EVIDENCE['get_related_request_trace'], 'status': 'pending'})
-                            state['approved_tools'].append('get_related_request_trace')
+                                'title': TOOL_TITLES[related_step], 'tool': related_step,
+                                'required_evidence': TOOL_EVIDENCE[related_step], 'status': 'pending'})
+                            state['approved_tools'].append(related_step)
                             state['timeline'].append({'type': 'decision', 'text': '投递记录包含关联请求，追加核验请求记录'})
-                if tool == 'get_related_request_trace' and isinstance(data, dict) and data.get('status') == 429:
-                    if not any(item['tool'] == 'search_quota_docs' for item in state['steps']):
+                if base == 'get_related_request_trace' and isinstance(data, dict) and data.get('status') == 429:
+                    if not any(base_tool(item['tool']) == 'search_quota_docs' for item in state['steps']):
+                        quota_step = _variant('search_quota_docs')
                         state['steps'].append({'id': f"s{len(state['steps']) + 1}",
-                            'title': TOOL_TITLES['search_quota_docs'], 'tool': 'search_quota_docs',
-                            'required_evidence': TOOL_EVIDENCE['search_quota_docs'], 'status': 'pending'})
-                        state['approved_tools'].append('search_quota_docs')
+                            'title': TOOL_TITLES[quota_step], 'tool': quota_step,
+                            'required_evidence': TOOL_EVIDENCE[quota_step], 'status': 'pending'})
+                        state['approved_tools'].append(quota_step)
                         state['timeline'].append({'type': 'decision', 'text': '关联请求返回 429，追加限流文档核验'})
-                if tool == "get_request_trace" and isinstance(data, dict):
+                if base == "get_request_trace" and isinstance(data, dict):
                     state["key_prefix"] = data.get("key_prefix", "")
                     if data.get('api_version') in {'v1', 'v2'}:
                         state['api_version'] = data['api_version']
                     if (self.dynamic_scope and state['kind'] == 'auth' and data.get('reason_code') in {'expired_key', 'missing_scope'}
-                            and not any(item['tool'] == 'inspect_key_scope' for item in state['steps'])):
-                        new_step = {'id': f"s{len(state['steps']) + 1}", 'title': TOOL_TITLES['inspect_key_scope'],
-                                    'tool': 'inspect_key_scope', 'required_evidence': TOOL_EVIDENCE['inspect_key_scope'], 'status': 'pending'}
+                            and not any(base_tool(item['tool']) == 'inspect_key_scope' for item in state['steps'])):
+                        scope_name = _variant('inspect_key_scope')
+                        new_step = {'id': f"s{len(state['steps']) + 1}", 'title': TOOL_TITLES[scope_name],
+                                    'tool': scope_name, 'required_evidence': TOOL_EVIDENCE[scope_name], 'status': 'pending'}
                         state['steps'].append(new_step)
-                        state['approved_tools'].append('inspect_key_scope')
+                        state['approved_tools'].append(scope_name)
                         state['timeline'].append({'type': 'decision', 'text': '请求记录显示需核对密钥状态或权限，追加检查', 'step_id': new_step['id']})
                     # A verified malformed header already explains the rejection. Scope
                     # inspection is useful only when that observation does not settle it.
                     if self.dynamic_scope and state['kind'] == 'auth' and data.get('reason_code') in {'malformed_header', 'missing_api_key_header'}:
                         for candidate in state['steps']:
-                            if candidate['tool'] == 'inspect_key_scope' and candidate['status'] == 'pending':
+                            if base_tool(candidate['tool']) == 'inspect_key_scope' and candidate['status'] == 'pending':
                                 candidate['status'] = 'skipped'
                                 state['timeline'].append({'type': 'decision', 'text': '请求记录已确认认证头格式错误，跳过权限检查', 'step_id': candidate['id']})
-                if tool == "create_support_ticket" and isinstance(data, dict):
+                if base == "create_support_ticket" and isinstance(data, dict):
                     state["ticket_id"] = data.get("ticket_id")
             else:
                 error_text = str(result.error or '').lower()
-                missing_record = tool in {'get_request_trace', 'get_webhook_delivery'} and '404' in error_text
+                missing_record = base in {'get_request_trace', 'get_webhook_delivery'} and '404' in error_text
                 if missing_record:
                     recovery_question = '模拟平台没有找到这条记录，请核对并提供正确的问题标识。'
-                elif tool in {'search_api_docs', 'search_quota_docs'} and result.success:
+                elif base in {'search_api_docs', 'search_quota_docs'} and result.success:
                     recovery_question = '未找到匹配的文档证据，请检查知识库后重试。'
                 else:
                     recovery_question = '工具暂不可用或结果不足，请稍后发送“继续”重试；当前不推断根因。'
@@ -815,20 +851,17 @@ class DeveloperAssistant:
     def _observation_summary(tool: str, data: Any, error: Optional[str]) -> str:
         if error:
             return f"查询失败：{error[:180]}"
-        if tool in {"search_api_docs", "search_quota_docs"}:
-            return f"找到 {len(data or [])} 个模拟平台文档片段"
-        if tool == "search_public_docs":
-            return f"找到 {len(data or [])} 条公开 API 文档摘要"
-        if tool == "mcp_search_public_docs":
-            return f"MCP 返回 {len(data or [])} 条公开 API 文档摘要"
-        if tool == "lookup_error_playbook":
-            return f"找到 {len(data or [])} 条错误处置条目"
-        if tool == "mcp_lookup_error_playbook":
-            return f"MCP 返回 {len(data or [])} 条错误处置条目"
-        if tool in {"get_request_trace", "get_related_request_trace"}:
+        base = base_tool(tool)
+        # An MCP-routed observation says so, so a reader can tell which transport produced it.
+        prefix = "MCP 返回" if tool != base else "找到"
+        if base in {"search_api_docs", "search_quota_docs"}:
+            return f"{prefix} {len(data or [])} 个模拟平台文档片段"
+        if base == "search_public_docs":
+            return f"{prefix} {len(data or [])} 条公开 API 文档摘要"
+        if base == "lookup_error_playbook":
+            return f"{prefix} {len(data or [])} 条错误处置条目"
+        if base in {"get_request_trace", "get_related_request_trace", "get_webhook_delivery"}:
             return f"HTTP {data.get('status')}；{_untrusted_text(data.get('error_summary'))}"
-        if tool == "inspect_key_scope":
+        if base == "inspect_key_scope":
             return f"状态 {data.get('status')}；scope {', '.join(data.get('scopes', []))}"
-        if tool == "get_webhook_delivery":
-            return f"HTTP {data.get('status')}；{_untrusted_text(data.get('error_summary'))}"
         return f"模拟工单 {data.get('ticket_id')} 已保存"

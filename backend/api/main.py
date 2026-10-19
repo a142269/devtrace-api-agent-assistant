@@ -48,6 +48,10 @@ WORKER_TTL_SECONDS = 90
 WORKER_HEARTBEAT_SECONDS = 30
 
 
+def _flag(name: str) -> bool:
+    return os.getenv(name, '').strip().lower() in {'1', 'true', 'yes', 'enabled'}
+
+
 def _stale_after_seconds() -> float:
     # The run timeout is 150s and the session lock is 180s; a shorter threshold
     # would let a query mark a healthy long-running task as interrupted.
@@ -218,23 +222,29 @@ async def lifespan(app: FastAPI):
     model = RuleDecisionModel() if mode == "rules" else AnthropicDecisionModel(
         key, model_name, base_url, skills.prompt_for("API 401 429 webhook", "developer"))
     mcp_client = None
-    mcp_enabled = os.getenv('DEVTRACE_MCP_PUBLIC_TOOLS', '').strip().lower() in {
-        '1', 'true', 'yes', 'enabled'}
-    planning_candidates = os.getenv('DEVTRACE_PLANNING_CANDIDATES', '').strip().lower() in {
-        '1', 'true', 'yes', 'enabled'}
-    if mcp_enabled:
+    mcp_enabled = _flag('DEVTRACE_MCP_PUBLIC_TOOLS')
+    mcp_all_tools = _flag('DEVTRACE_MCP_ALL_TOOLS')
+    planning_candidates = _flag('DEVTRACE_PLANNING_CANDIDATES')
+    sandbox_url = os.getenv("DEVELOPER_SANDBOX_URL", "http://developer-sandbox:8100")
+    if mcp_enabled or mcp_all_tools:
         from mcp.client import InProcessTransport, MCPClient
+        from mcp.runtime import MCPToolRuntime
         from mcp.server import build_default_server
 
-        mcp_client = MCPClient(InProcessTransport(build_default_server()))
+        # The in-process server shares this process's knowledge bases and sandbox URL, so
+        # the MCP path resolves the same records as the local tool path.
+        runtime = MCPToolRuntime(knowledge=knowledge,
+                                 public_knowledge=PublicDocsKnowledge(), sandbox_url=sandbox_url)
+        mcp_client = MCPClient(InProcessTransport(build_default_server(runtime)))
         await mcp_client.initialize()
-        logger.info('MCP public tools enabled (server=%s)', mcp_client.server_info.get('serverInfo', {}))
+        logger.info('MCP tools enabled (public=%s all=%s server=%s)', mcp_enabled, mcp_all_tools,
+                    mcp_client.server_info.get('serverInfo', {}))
     _developer = DeveloperAssistant(
         memory=memory, knowledge=knowledge, redis_client=memory._redis, model=model,
         tool_manager=MCPToolManager(api_key=key, base_url=base_url, model=model_name),
-        sandbox_url=os.getenv("DEVELOPER_SANDBOX_URL", "http://developer-sandbox:8100"),
+        sandbox_url=sandbox_url,
         public_knowledge=PublicDocsKnowledge(),
-        mcp_client=mcp_client, mcp_public_tools=mcp_enabled,
+        mcp_client=mcp_client, mcp_public_tools=mcp_enabled, mcp_all_tools=mcp_all_tools,
         planning_candidates=planning_candidates,
     )
     heartbeat = None

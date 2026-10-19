@@ -2,6 +2,19 @@
 
 from typing import Any, Dict
 
+MCP_PREFIX = "mcp_"
+
+
+def base_tool(name: str) -> str:
+    """Strip the MCP prefix so rules match local and MCP-hosted names alike."""
+    text = str(name or "")
+    return text[len(MCP_PREFIX):] if text.startswith(MCP_PREFIX) else text
+
+
+def mcp_name(name: str) -> str:
+    return name if str(name).startswith(MCP_PREFIX) else MCP_PREFIX + str(name)
+
+
 TOOL_TITLES = {
     "search_api_docs": "检索对应版本的 API 文档",
     "search_public_docs": "检索公开 API 文档摘要",
@@ -74,6 +87,17 @@ KIND_TO_TOOLS = {
 }
 # When enabled, the public_api path uses the MCP-hosted tools instead of local ones.
 PUBLIC_API_MCP_TOOLS = ["mcp_lookup_error_playbook", "mcp_search_public_docs"]
+# Kinds whose read tools the agent can route through the MCP server as a whole.
+MCP_ROUTED_KINDS = ("auth", "quota", "webhook")
+# The MCP server hosts these read tools too, so every planning rule compares base
+# names and one plan spelling works for both transports. create_support_ticket is
+# deliberately absent: a ticket is a side effect, not a read.
+MCP_READ_TOOLS = ("search_api_docs", "search_quota_docs", "get_request_trace",
+                  "get_related_request_trace", "inspect_key_scope", "get_webhook_delivery")
+for _tool in MCP_READ_TOOLS:
+    TOOL_TITLES[mcp_name(_tool)] = f"通过 MCP {TOOL_TITLES[_tool]}"
+    TOOL_EVIDENCE[mcp_name(_tool)] = f"通过 MCP 工具返回的{TOOL_EVIDENCE[_tool]}"
+    TOOL_SCHEMAS[mcp_name(_tool)] = dict(TOOL_SCHEMAS[_tool])
 TOOL_DEPENDENCIES = {"inspect_key_scope": {"get_request_trace"},
                      "get_related_request_trace": {"get_webhook_delivery"},
                      "search_quota_docs": {"get_related_request_trace"}}
@@ -83,37 +107,42 @@ def _approved_tools(kind: str, proposed: Any, allowed: list[str] | None = None) 
     """Keep model ordering where safe, then supply the mandatory evidence chain."""
     raw = [tool for tool in proposed[:10] if isinstance(tool, str)] if isinstance(proposed, list) else []
     allowed = allowed or KIND_TO_TOOLS[kind]
-    chosen = list(dict.fromkeys(tool for tool in raw if tool in allowed))
+    # A model may name either spelling; the allowed list decides which one runs.
+    by_base = {base_tool(tool): tool for tool in allowed}
+    chosen = list(dict.fromkeys(by_base[base_tool(tool)] for tool in raw if base_tool(tool) in by_base))
     adjustments = []
-    if any(tool not in allowed for tool in raw):
+    if any(base_tool(tool) not in by_base for tool in raw):
         adjustments.append("移除不属于该故障类型的工具")
     # Require evidence targets, not a fixed set of tools. Scope inspection is
     # conditional on the observed request; it can be added after the trace.
-    mandatory = [tool for tool in allowed if tool != 'inspect_key_scope']
+    mandatory = [tool for tool in allowed if base_tool(tool) != 'inspect_key_scope']
     for tool in mandatory:
         if tool not in chosen:
             chosen.append(tool)
             adjustments.append(f"补充必需证据工具 {tool}")
-    for tool, dependencies in TOOL_DEPENDENCIES.items():
-        if tool in chosen:
-            for dependency in dependencies:
-                if dependency in chosen and chosen.index(dependency) > chosen.index(tool):
-                    chosen.remove(tool)
-                    chosen.insert(chosen.index(dependency) + 1, tool)
-                    adjustments.append(f"将 {tool} 移至 {dependency} 之后")
+    for base, dependencies in TOOL_DEPENDENCIES.items():
+        tool = by_base.get(base)
+        if tool is None or tool not in chosen:
+            continue
+        for dependency_base in dependencies:
+            dependency = by_base.get(dependency_base)
+            if dependency and dependency in chosen and chosen.index(dependency) > chosen.index(tool):
+                chosen.remove(tool)
+                chosen.insert(chosen.index(dependency) + 1, tool)
+                adjustments.append(f"将 {tool} 移至 {dependency} 之后")
     return raw, chosen, adjustments
 
 
 def _ready_steps(state: Dict[str, Any]) -> list[Dict[str, Any]]:
-    completed = {step["tool"] for step in state["steps"] if step["status"] in {"done", "skipped"}}
+    completed = {base_tool(step["tool"]) for step in state["steps"] if step["status"] in {"done", "skipped"}}
     ready = []
     for step in state["steps"]:
         if step["status"] != "pending":
             continue
-        tool = step["tool"]
+        tool = base_tool(step["tool"])
         if tool == 'search_api_docs' and state.get('require_version_observation') and 'get_request_trace' not in completed:
             continue
-        dependencies = ({item['tool'] for item in state['steps'] if item['tool'] and item['tool'] != 'create_support_ticket'} if tool == "create_support_ticket"
+        dependencies = ({base_tool(item['tool']) for item in state['steps'] if item['tool'] and base_tool(item['tool']) != 'create_support_ticket'} if tool == "create_support_ticket"
                         else TOOL_DEPENDENCIES.get(tool, set()))
         if not dependencies.issubset(completed):
             continue
@@ -131,17 +160,23 @@ def _ready_steps(state: Dict[str, Any]) -> list[Dict[str, Any]]:
 _PLAN_RANK = {
     "get_request_trace": 0, "get_webhook_delivery": 0, "get_related_request_trace": 1,
     "search_quota_docs": 2, "inspect_key_scope": 2, "search_api_docs": 3,
-    "search_public_docs": 3, "lookup_error_playbook": 3, "mcp_search_public_docs": 3,
-    "mcp_lookup_error_playbook": 3, "create_support_ticket": 9,
+    "search_public_docs": 3, "lookup_error_playbook": 3, "create_support_ticket": 9,
 }
+# Rank and score by base name so an MCP-routed plan keeps the same ordering.
+_DOC_TOOLS = {"search_api_docs", "search_public_docs", "search_quota_docs",
+              "lookup_error_playbook"}
+_RECORD_TOOLS = {"get_request_trace", "get_webhook_delivery", "get_related_request_trace"}
 
 
 def _dependency_ok(tools: list[str]) -> bool:
+    positions: Dict[str, int] = {}
+    for index, name in enumerate(tools):
+        positions.setdefault(base_tool(name), index)
     for tool, dependencies in TOOL_DEPENDENCIES.items():
-        if tool not in tools:
+        if tool not in positions:
             continue
         for dependency in dependencies:
-            if dependency in tools and tools.index(dependency) > tools.index(tool):
+            if dependency in positions and positions[dependency] > positions[tool]:
                 return False
     return True
 
@@ -149,12 +184,12 @@ def _dependency_ok(tools: list[str]) -> bool:
 def _score_candidate(tools: list[str], allowed: list[str], issue_id: str) -> float:
     coverage = len(set(tools) & set(allowed)) / max(1, len(allowed))
     score = coverage * 4.0
-    docs = {"search_api_docs", "search_public_docs", "search_quota_docs",
-            "lookup_error_playbook", "mcp_search_public_docs", "mcp_lookup_error_playbook"}
-    records = {"get_request_trace", "get_webhook_delivery", "get_related_request_trace"}
-    if issue_id and any(tool in docs for tool in tools):
-        first_record = min((tools.index(tool) for tool in tools if tool in records), default=len(tools))
-        first_doc = min((tools.index(tool) for tool in tools if tool in docs), default=len(tools))
+    bases = [base_tool(tool) for tool in tools]
+    if issue_id and any(tool in _DOC_TOOLS for tool in bases):
+        first_record = min((index for index, tool in enumerate(bases) if tool in _RECORD_TOOLS),
+                           default=len(bases))
+        first_doc = min((index for index, tool in enumerate(bases) if tool in _DOC_TOOLS),
+                        default=len(bases))
         score += 2.0 if first_record < first_doc else 0.0
     if _dependency_ok(tools):
         score += 1.0
@@ -171,17 +206,18 @@ def build_plan_candidates(kind: str, chosen: list[str], allowed: list[str] | Non
         base = list(allowed)
     candidates = [{"name": "approved", "tools": base,
                    "score": _score_candidate(base, allowed, issue_id)}]
-    evidence_first = sorted(base, key=lambda tool: (_PLAN_RANK.get(tool, 5),
+    evidence_first = sorted(base, key=lambda tool: (_PLAN_RANK.get(base_tool(tool), 5),
                                                     base.index(tool)))
     if evidence_first != base:
         candidates.append({"name": "evidence_first", "tools": evidence_first,
                            "score": _score_candidate(evidence_first, allowed, issue_id)})
-    minimal = [tool for tool in allowed if tool != "inspect_key_scope"]
+    minimal = [tool for tool in allowed if base_tool(tool) != "inspect_key_scope"]
     candidates.append({"name": "minimal", "tools": minimal,
                        "score": _score_candidate(minimal, allowed, issue_id)})
     if require_version:
         candidates = [candidate for candidate in candidates
-                      if candidate["name"] != "minimal" or "get_request_trace" in candidate["tools"]]
+                      if candidate["name"] != "minimal"
+                      or any(base_tool(tool) == "get_request_trace" for tool in candidate["tools"])]
     return candidates
 
 

@@ -8,6 +8,7 @@ failure is actually explained by its related request.
 
 import re
 
+from developer.planner import base_tool
 from developer.security import scan_untrusted
 
 CAUSES = {
@@ -37,15 +38,16 @@ def _source(action):
 
 
 def _trace_actions(actions):
+    """Match by base tool name so a run that used the MCP path still yields evidence."""
     return [item for item in actions
             if item.get('success') and isinstance(item.get('result'), dict)
-            and item.get('tool') in {'get_request_trace', 'get_related_request_trace'}]
+            and base_tool(item.get('tool')) in {'get_request_trace', 'get_related_request_trace'}]
 
 
 def _first(actions, tool):
     return next((item for item in actions
                  if item.get('success') and isinstance(item.get('result'), dict)
-                 and item.get('tool') == tool), None)
+                 and base_tool(item.get('tool')) == tool), None)
 
 
 def _needed_scope(trace):
@@ -137,9 +139,9 @@ def build_diagnosis(kind, actions):
     hypotheses = []
     conflicts = []
     primary = next((item for item in _trace_actions(actions)
-                    if item.get('tool') == 'get_request_trace'), None)
+                    if base_tool(item.get('tool')) == 'get_request_trace'), None)
     related = next((item for item in _trace_actions(actions)
-                    if item.get('tool') == 'get_related_request_trace'), None)
+                    if base_tool(item.get('tool')) == 'get_related_request_trace'), None)
     key = _first(actions, 'inspect_key_scope')
     delivery = _first(actions, 'get_webhook_delivery')
 
