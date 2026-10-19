@@ -30,9 +30,16 @@ class InProcessTransport:
 
 
 class StdioTransport:
-    """Spawn `python -m mcp.server` and exchange one JSON object per line."""
+    """Spawn a child process and exchange one JSON object per line on its stdio.
 
-    def __init__(self, cwd: Optional[str] = None):
+    With no command it starts the bundled server (`python -m mcp.server`); a registry
+    entry supplies its own executable and arguments for third-party servers.
+    """
+
+    def __init__(self, command: Optional[str] = None, args: Optional[list] = None,
+                 cwd: Optional[str] = None):
+        self.command = [command, *[str(arg) for arg in (args or [])]] if command else \
+            [sys.executable, "-m", "mcp.server"]
         self.cwd = cwd or os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
         self._process = None
         self._lock = asyncio.Lock()
@@ -40,7 +47,7 @@ class StdioTransport:
     async def start(self) -> None:
         if self._process is None:
             self._process = await asyncio.create_subprocess_exec(
-                sys.executable, "-m", "mcp.server",
+                *self.command,
                 stdin=asyncio.subprocess.PIPE, stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.DEVNULL, cwd=self.cwd)
 

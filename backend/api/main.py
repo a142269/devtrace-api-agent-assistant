@@ -30,7 +30,9 @@ from developer.data import DOCS
 from developer.events import event_sink
 from developer.public_knowledge import PublicDocsKnowledge
 from developer.prompts import describe as describe_prompts
+from developer.planner import TOOL_TITLES
 from mcp.knowledge_base import KnowledgeBase
+from mcp.registry import connect_external_servers
 from mcp.tool_manager import MCPToolManager
 from memory.conversation_memory import MemoryManager
 
@@ -248,22 +250,37 @@ async def lifespan(app: FastAPI):
         planning_candidates=planning_candidates,
     )
     heartbeat = None
+    external = None
+    # Connect after the assistant has registered its own tools, so the registry can see
+    # every built-in name and skip a colliding external tool instead of replacing it.
     try:
-        await register_worker(_developer.redis)
-        heartbeat = asyncio.create_task(worker_heartbeat(_developer.redis))
-        interrupted = await reconcile_stale_tasks(_developer.redis)
-        if interrupted:
-            logger.warning('启动时把 %s 个残留 running 任务标记为 interrupted', interrupted)
-    except Exception:
-        logger.warning('启动时任务状态修复失败', exc_info=True)
-    try:
-        yield
+        external = await connect_external_servers(
+            _developer.tools, os.getenv('DEVTRACE_MCP_SERVERS', ''), reserved=list(TOOL_TITLES))
+        app.state.external_mcp = external.summary()
+        if app.state.external_mcp["servers"]:
+            logger.info('外部 MCP 服务器：%s',
+                        json.dumps(app.state.external_mcp, ensure_ascii=False)[:500])
+        try:
+            await register_worker(_developer.redis)
+            heartbeat = asyncio.create_task(worker_heartbeat(_developer.redis))
+            interrupted = await reconcile_stale_tasks(_developer.redis)
+            if interrupted:
+                logger.warning('启动时把 %s 个残留 running 任务标记为 interrupted', interrupted)
+        except Exception:
+            logger.warning('启动时任务状态修复失败', exc_info=True)
+        try:
+            yield
+        finally:
+            if heartbeat is not None:
+                heartbeat.cancel()
+                await asyncio.gather(heartbeat, return_exceptions=True)
+            if mcp_client is not None:
+                await mcp_client.close()
     finally:
-        if heartbeat is not None:
-            heartbeat.cancel()
-            await asyncio.gather(heartbeat, return_exceptions=True)
-        if mcp_client is not None:
-            await mcp_client.close()
+        # The registry owns the only subprocesses this process starts, so it is closed
+        # even when a later startup step raises.
+        if external is not None:
+            await external.close()
         await memory.close()
         _developer = None
 

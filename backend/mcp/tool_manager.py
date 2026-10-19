@@ -152,6 +152,11 @@ class MCPToolManager:
     def unregister(self, name: str) -> None:
         self._tools.pop(name, None)
 
+    @property
+    def tool_names(self) -> List[str]:
+        """Registered tool names, used by the external registry to avoid clashes."""
+        return list(self._tools)
+
     # ── 核心调用 ──────────────────────────────────────────────────────────────
 
     async def call(
