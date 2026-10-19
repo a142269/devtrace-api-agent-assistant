@@ -32,6 +32,10 @@ _SECRET_VALUE = re.compile(r'(?i)(sk-[A-Za-z0-9._\-]{4,}|whsec_[A-Za-z0-9_\-]{4,
 # carries the same id; worker and background paths leave it empty.
 request_id_var: contextvars.ContextVar[str] = contextvars.ContextVar('devtrace_request_id', default='')
 remote_var: contextvars.ContextVar[str] = contextvars.ContextVar('devtrace_remote', default='unknown')
+# Endpoints and the worker set this before running the assistant so that tool
+# events raised deep inside a run carry the owning workspace without threading
+# the value through every signature.
+workspace_var: contextvars.ContextVar[str] = contextvars.ContextVar('devtrace_workspace', default='')
 
 
 def _clean(value: Any, limit: int = DETAIL_LIMIT) -> str:
@@ -55,6 +59,7 @@ def sanitize_detail(detail: Optional[Dict[str, Any]]) -> Dict[str, Any]:
 
 async def record(redis: Any, event: str, *, actor: str = '', resource: str = '',
                  status: str = '', request_id: Optional[str] = None, remote: str = '',
+                 workspace: Optional[str] = None,
                  detail: Optional[Dict[str, Any]] = None) -> None:
     """Append one audit event. Never raises: failures are logged and ignored."""
     xadd = getattr(redis, 'xadd', None)
@@ -68,6 +73,7 @@ async def record(redis: Any, event: str, *, actor: str = '', resource: str = '',
         'status': _clean(status, 64),
         'request_id': _clean(request_id if request_id is not None else request_id_var.get(), 64),
         'remote': _clean(remote if remote else remote_var.get(), 64),
+        'workspace': _clean(workspace if workspace is not None else workspace_var.get(), 40),
         'detail': json.dumps(sanitize_detail(detail), ensure_ascii=False, sort_keys=True),
     }
     try:
@@ -84,8 +90,11 @@ def _entry(entry_id: Any, values: Dict[Any, Any]) -> Dict[str, Any]:
     row = {'id': _decode(entry_id)}
     for key, value in (values or {}).items():
         row[_decode(key)] = _decode(value)
-    for key in ('ts', 'event', 'actor', 'resource', 'status', 'request_id', 'remote'):
+    for key in ('ts', 'event', 'actor', 'resource', 'status', 'request_id', 'remote', 'workspace'):
         row.setdefault(key, '')
+    # Events written before workspace tagging existed belong to the default workspace.
+    if not row['workspace']:
+        row['workspace'] = 'default'
     try:
         detail = json.loads(row.get('detail') or '{}')
         row['detail'] = detail if isinstance(detail, dict) else {}
@@ -94,7 +103,8 @@ def _entry(entry_id: Any, values: Dict[Any, Any]) -> Dict[str, Any]:
     return row
 
 
-async def read(redis: Any, limit: int, user: str = '', event: str = '') -> List[Dict[str, Any]]:
+async def read(redis: Any, limit: int, user: str = '', event: str = '',
+               workspace: str = '') -> List[Dict[str, Any]]:
     """Newest-first events, filtered server-side; scans at most SCAN_CAP records."""
     xrevrange = getattr(redis, 'xrevrange', None)
     if xrevrange is None or limit <= 0:
@@ -117,6 +127,8 @@ async def read(redis: Any, limit: int, user: str = '', event: str = '') -> List[
             if user and row.get('actor') != user:
                 continue
             if event and row.get('event') != event:
+                continue
+            if workspace and row.get('workspace') != workspace:
                 continue
             events.append(row)
             if len(events) >= limit:

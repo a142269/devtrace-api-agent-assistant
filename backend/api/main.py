@@ -20,7 +20,8 @@ from fastapi.security import HTTPAuthorizationCredentials
 from pydantic import BaseModel, ConfigDict, Field
 from redis.exceptions import LockError
 
-from api.auth import authenticated_user, bearer, issue_token, require_admin, settings as auth_settings, verify_password
+from api.auth import (authenticated_user, bearer, issue_token,
+                      require_admin, settings as auth_settings, verify_password, workspace_for)
 from core.skill_loader import SkillManager
 from developer import audit
 from developer import task_queue
@@ -95,9 +96,12 @@ async def _should_repair(redis, record: dict) -> bool:
     return not await _worker_alive(redis, owner)
 
 
-async def _write_task_record(redis, task_id: str, user_id: str, status: str, run_id=None) -> dict:
+async def _write_task_record(redis, task_id: str, user_id: str, status: str, run_id=None,
+                             workspace: Optional[str] = None) -> dict:
     record = {'task_id': task_id, 'user_id': user_id, 'status': status, 'run_id': run_id,
               'worker_id': WORKER_ID, 'updated_at': time.time()}
+    if workspace:
+        record['workspace'] = workspace
     await redis.setex(_task_key(task_id), TASK_TTL_SECONDS, json.dumps(record))
     # The index lets a restarted process find the tasks an earlier process left behind.
     if status == 'running':
@@ -185,7 +189,7 @@ async def reconcile_stale_tasks(redis) -> int:
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     global _developer
-    app.state.jwt_secret, app.state.users = auth_settings()
+    app.state.jwt_secret, app.state.users, app.state.user_workspaces = auth_settings()
     mode = os.getenv("DEVELOPER_MODEL_MODE", "anthropic")
     key = os.getenv("ANTHROPIC_API_KEY", "")
     if mode != "rules" and not key:
@@ -275,6 +279,34 @@ async def attach_request_id(request: Request, call_next):
 def _remote(request: Optional[Request]) -> str:
     return request.client.host if request is not None and request.client else 'unknown'
 
+
+def _workspace_of(user: str) -> str:
+    return workspace_for(getattr(app.state, 'user_workspaces', {}), user)
+
+
+def _workspace_match(record: dict, workspace: str) -> bool:
+    # Records written before workspace tagging carry no field and belong to `default`.
+    recorded = str(record.get('workspace') or '')
+    return not recorded or recorded == workspace
+
+
+async def _stamp_run(redis, run_id, workspace: str) -> None:
+    """Attach the owning workspace to a run record written by the assistant."""
+    if not run_id:
+        return
+    key = f'developer:run:{run_id}'
+    raw = await redis.get(key)
+    if not raw:
+        return
+    try:
+        record = json.loads(raw)
+    except (TypeError, ValueError):
+        return
+    if not isinstance(record, dict):
+        return
+    record['workspace'] = workspace
+    await redis.setex(key, TASK_TTL_SECONDS, json.dumps(record, ensure_ascii=False))
+
 class DeveloperChatRequest(BaseModel):
     model_config = ConfigDict(extra='forbid')
     message: str = Field(min_length=1, max_length=4000)
@@ -305,10 +337,12 @@ async def login(req: LoginRequest, request: Request):
     encoded = request.app.state.users.get(req.username, 'pbkdf2_sha256$' + '00' * 16 + '$' + '00' * 32)
     if not verify_password(req.password, encoded) or req.username not in request.app.state.users:
         await audit.record(_developer.redis, 'auth.login.failure', actor=req.username,
-                           status='failure', remote=_remote(request))
+                           status='failure', remote=_remote(request),
+                           workspace=_workspace_of(req.username))
         raise HTTPException(401, '用户名或密码错误')
     await audit.record(_developer.redis, 'auth.login.success', actor=req.username,
-                       status='success', remote=_remote(request))
+                       status='success', remote=_remote(request),
+                       workspace=_workspace_of(req.username))
     return {'access_token': issue_token(req.username, request.app.state.jwt_secret), 'token_type': 'bearer', 'expires_in': 3600}
 
 @app.get("/health")
@@ -321,7 +355,8 @@ async def health():
 @app.get('/developer/prompts', tags=['开发者助手'])
 async def developer_prompts(user_id: str = Depends(current_user)):
     """Prompt version and sizes only; never expose full system prompts."""
-    await audit.record(_developer.redis, 'prompts.read', actor=user_id, status='success')
+    await audit.record(_developer.redis, 'prompts.read', actor=user_id, status='success',
+                       workspace=_workspace_of(user_id))
     return describe_prompts()
 
 @app.post("/developer/chat", tags=["开发者助手"])
@@ -331,6 +366,10 @@ async def developer_chat(req: DeveloperChatRequest, user_id: str = Depends(curre
         raise HTTPException(503, "开发者助手未就绪")
     await limit('developer:chat-limit:' + hashlib.sha256(user_id.encode()).hexdigest(), 30)
     import uuid
+    workspace = _workspace_of(user_id)
+    # Tool events raised deep inside the assistant run inherit the workspace from
+    # this contextvar instead of threading it through the assistant signature.
+    audit.workspace_var.set(workspace)
     conversation_id = req.conversation_id or str(uuid.uuid4())
     payload_hash = hashlib.sha256(json.dumps(req.model_dump(), sort_keys=True).encode()).hexdigest()
     idem = hashlib.sha256(f'{user_id}\0{idempotency_key}'.encode()).hexdigest() if idempotency_key else None
@@ -357,17 +396,18 @@ async def developer_chat(req: DeveloperChatRequest, user_id: str = Depends(curre
             result = await asyncio.wait_for(_developer.run(req.message, user_id, conversation_id), timeout=150)
         except asyncio.TimeoutError:
             await audit.record(_developer.redis, 'chat.sync', actor=user_id, status='failure',
-                               detail={'reason_code': 'timeout'})
+                               workspace=workspace, detail={'reason_code': 'timeout'})
             raise HTTPException(504, '诊断超时，请使用同一会话重试')
         except Exception:
             await audit.record(_developer.redis, 'chat.sync', actor=user_id, status='failure',
-                               detail={'reason_code': 'error'})
+                               workspace=workspace, detail={'reason_code': 'error'})
             raise
         if idem_key:
             await _developer.redis.setex(idem_key, 86400, json.dumps({'payload_hash': payload_hash, 'response': result}, ensure_ascii=False))
+        await _stamp_run(_developer.redis, result.get('run_id'), workspace)
         await audit.record(
             _developer.redis, 'chat.sync', actor=user_id, resource=str(result.get('run_id') or ''),
-            status='success',
+            status='success', workspace=workspace,
             detail={'kind': str(result.get('kind') or ''),
                     'latency_ms': round((time.perf_counter() - started) * 1000, 1)})
         return result
@@ -388,8 +428,10 @@ async def developer_memory(conversation_id: str, user_id: str = Depends(current_
     if _developer is None:
         raise HTTPException(503, '开发者助手未就绪')
     result = await _developer.memory.export_memory(user_id, conversation_id)
+    result['workspace'] = _workspace_of(user_id)
     await audit.record(_developer.redis, 'memory.export', actor=user_id,
-                       resource=conversation_id, status='success')
+                       resource=conversation_id, status='success',
+                       workspace=result['workspace'])
     return result
 
 
@@ -403,8 +445,10 @@ async def developer_memory_delete(conversation_id: str, user_id: str = Depends(c
         f'{user_id}\0{conversation_id}'.encode()).hexdigest()
     deleted_plan = await _developer.redis.delete(plan_key)
     result['plan_deleted'] = bool(deleted_plan)
+    result['workspace'] = _workspace_of(user_id)
     await audit.record(_developer.redis, 'memory.delete', actor=user_id,
-                       resource=conversation_id, status='success')
+                       resource=conversation_id, status='success',
+                       workspace=result['workspace'])
     return result
 
 
@@ -413,6 +457,7 @@ async def developer_runs(user_id: str = Depends(current_user)):
     if _developer is None:
         raise HTTPException(503, '开发者助手未就绪')
     key = 'developer:run-index:' + hashlib.sha256(user_id.encode()).hexdigest()
+    workspace = _workspace_of(user_id)
     run_ids = await _developer.redis.zrevrange(key, 0, 49)
     items = []
     for run_id in run_ids:
@@ -422,11 +467,11 @@ async def developer_runs(user_id: str = Depends(current_user)):
         if not raw:
             continue
         record = json.loads(raw)
-        if record.get('user_id') == user_id:
+        if record.get('user_id') == user_id and _workspace_match(record, workspace):
             response = record['response']
             items.append({'run_id': run_id, 'conversation_id': response['conversation_id'],
                           'kind': response['kind'], 'status': response['plan']['status'],
-                          'goal': response['plan']['goal']})
+                          'goal': response['plan']['goal'], 'workspace': workspace})
     return {'runs': items}
 
 
@@ -438,7 +483,7 @@ async def developer_run(run_id: str, user_id: str = Depends(current_user)):
     if not raw:
         raise HTTPException(404, "运行记录不存在或已过期")
     record = json.loads(raw)
-    if record.get("user_id") != user_id:
+    if record.get("user_id") != user_id or not _workspace_match(record, _workspace_of(user_id)):
         raise HTTPException(404, "运行记录不存在或已过期")
     return record["response"]
 
@@ -449,7 +494,8 @@ async def developer_task(task_id: str, user_id: str = Depends(current_user)):
         raise HTTPException(503, '开发者助手未就绪')
     raw = await _developer.redis.get(f'developer:task:{task_id}')
     record = json.loads(raw) if raw else None
-    if not record or record.get('user_id') != user_id:
+    if (not record or record.get('user_id') != user_id
+            or not _workspace_match(record, _workspace_of(user_id))):
         raise HTTPException(404, '任务不存在或已过期')
     # Query-time repair: a task whose worker stopped cannot stay `running` forever,
     # but a task owned by another live replica must not be touched.
@@ -462,17 +508,20 @@ async def developer_task(task_id: str, user_id: str = Depends(current_user)):
 async def developer_audit(limit: int = Query(50, ge=1, le=200),
                           user: str = Query('', max_length=120),
                           event: str = Query('', max_length=64),
+                          workspace: str = Query('', max_length=40, pattern=r'^[A-Za-z0-9_-]*$'),
                           admin: str = Depends(require_admin)):
     """Newest-first audit events (admin only). Out-of-range limit is rejected with 422.
 
     The stream is append-only at the application layer; Redis itself is not WORM
-    storage, so this is an operational log, not a tamper-proof record.
+    storage, so this is an operational log, not a tamper-proof record. Events
+    written before workspace tagging existed are reported as `default`.
     """
     if _developer is None:
         raise HTTPException(503, '服务未就绪')
-    events = await audit.read(_developer.redis, limit, user=user.strip(), event=event.strip())
+    events = await audit.read(_developer.redis, limit, user=user.strip(), event=event.strip(),
+                              workspace=workspace.strip())
     await audit.record(_developer.redis, 'audit.read', actor=admin, status='success',
-                       detail={'kind': 'audit.query'})
+                       workspace=_workspace_of(admin), detail={'kind': 'audit.query'})
     return {'events': events, 'count': len(events)}
 
 
@@ -486,18 +535,21 @@ async def _queued_stream(req: 'DeveloperChatRequest', user_id: str,
     import uuid
     conversation_id = req.conversation_id or str(uuid.uuid4())
     task_id = str(uuid.uuid4())
+    workspace = _workspace_of(user_id)
+    audit.workspace_var.set(workspace)
     session_claimed = await task_queue.try_claim_session(
         _developer.redis, user_id, conversation_id, task_id)
     if not session_claimed:
         raise HTTPException(409, '该请求或会话正在处理中，请稍后重试')
     try:
         await task_queue.enqueue(_developer.redis, task_id, user_id,
-                                 _redact(req.message), conversation_id)
+                                 _redact(req.message), conversation_id, workspace=workspace)
     except Exception:
         await task_queue.release_session(_developer.redis, user_id, conversation_id)
         raise
     await audit.record(_developer.redis, 'task.enqueued', actor=user_id, resource=task_id,
-                       status='queued', detail={'status': 'queued', 'attempts': 0})
+                       status='queued', workspace=workspace,
+                       detail={'status': 'queued', 'attempts': 0})
 
     async def stream():
         import time
@@ -556,18 +608,25 @@ async def developer_chat_stream(req: DeveloperChatRequest, user_id: str = Depend
         raise HTTPException(503, '开发者助手未就绪')
     if _queue_enabled():
         return await _queued_stream(req, user_id, idempotency_key)
+    workspace = _workspace_of(user_id)
+
     async def stream():
         import uuid
         task_id = str(uuid.uuid4())
         terminal = False
         queue: asyncio.Queue = asyncio.Queue()
+        # The generator is iterated in the response task, so tag the context here
+        # as well for tool events emitted during the run.
+        audit.workspace_var.set(workspace)
 
         async def record_task(status, run_id=None):
-            await _write_task_record(_developer.redis, task_id, user_id, status, run_id)
+            await _write_task_record(_developer.redis, task_id, user_id, status, run_id,
+                                     workspace=workspace)
 
         async def audit_finish(status):
             await audit.record(_developer.redis, 'task.finished', actor=user_id, resource=task_id,
-                               status=status, detail={'status': status, 'attempts': 1})
+                               status=status, workspace=workspace,
+                               detail={'status': status, 'attempts': 1})
 
         async def execute():
             nonlocal terminal

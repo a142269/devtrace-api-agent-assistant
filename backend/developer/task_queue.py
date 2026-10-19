@@ -59,11 +59,12 @@ async def update_task(redis, task_id: str, **fields) -> dict:
 
 
 async def enqueue(redis, task_id: str, user_id: str, message: str,
-                  conversation_id: str) -> dict:
+                  conversation_id: str, workspace: str = 'default') -> dict:
     record = {
         'task_id': task_id, 'user_id': user_id, 'status': 'queued',
         'attempts': 0, 'created_at': time.time(), 'updated_at': time.time(),
         'run_id': None, 'cancel_requested': False,
+        'workspace': workspace or 'default',
         'payload': {'message': message, 'conversation_id': conversation_id},
     }
     await save_task(redis, task_id, record)
