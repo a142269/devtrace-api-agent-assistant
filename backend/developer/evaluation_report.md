@@ -224,7 +224,7 @@ Agent 新增 `search_public_docs` 工具与 `public_api` 计划路径；模型�
 - 评测：10 条公开 API 问题走 MCP 工具路径 **10/10**（计划完成、仅使用 MCP 工具、带来源与公开文档声明），报告 [eval_mcp_2026-10-18.json](eval_mcp_2026-10-18.json)；Docker + 真实模型验证工具清单恰为 `mcp_lookup_error_playbook → mcp_search_public_docs`、有恢复建议与来源，报告 [eval_mcp_http_2026-10-18.json](eval_mcp_http_2026-10-18.json)。
 - 测试：initialize/tools/list/tools/call、未知工具报错、Agent 走 MCP 路径，共 4 个新用例（测试总数 107）。
 
-局限：MCP server 只托管 2 个文档工具，未迁移全部 9 个工具；没有外部 MCP server 配置/发现/鉴权；stdio transport 已实现但自动化评测主要用 in-process transport；协议版本固定 `2024-11-05`。
+局限：MCP server 只托管 2 个文档工具，未迁移全部 9 个工具；没有外部 MCP server 配置/发现/鉴权；stdio transport 已实现但自动化评测主要用 in-process transport；协议版本固定 `2024-11-05`。（本节记录 P4 之前的状态；八类只读工具全部托管、`DEVTRACE_MCP_ALL_TOOLS` 路由与外部 stdio server 注册表见文末"MCP 全量只读工具路由与外部注册表（2026-10-19，P4）"。）
 
 ## 提示词版本化（2026-10-18）
 
@@ -297,3 +297,14 @@ Agent 新增 `search_public_docs` 工具与 `public_api` 计划路径；模型�
 - Docker HTTP 验证（本机 `devtrace-verify` 栈，API 18002，两个临时 workspace 用户 wsusera(ws-a，管理员)/wsuserb(ws-b)，验证后 `.env` 已回滚、账号移除）：31 项检查全部通过——A/B 登录 200；A 的 chat 200，其 run B 读 **404**、A 读 200；B 队列 SSE 任务记录 workspace=ws-b，A 读该任务 **404**、B 读 200；记忆导出返回 `ws-a`；`GET /developer/audit` 200 且同时含 ws-a/ws-b 事件，`?workspace=ws-a` 过滤后仅 ws-a，`workspace=not valid!` 422，非管理员 403，匿名 401；`task.finished` 由 worker 打 `ws-b` 标签；整份审计响应检索不含两个口令、`Bearer`、`sk-`。回归：`verify_queue.py` 队列 SSE 全链路通过（started/15 timeline/complete/task_completed/无 payload 泄漏）。报告在工作区根目录 `eval_workspace_docker_2026-10-19.json` 与 `verify_workspace.py`（本机文件，不入库）。
 - 局限：workspace 是"归属 + 可见性边界"，不是硬多租户——memory/ChromaDB 仍按 user+conversation 隔离、未按 workspace 重新分区；无共享 workspace 成员、邀请或跨租户管理后台；workspace 迁移（同一用户改配置）会让旧记录按 404 隐藏，不做数据搬迁；仍是本机演示，非生产权限系统。
 
+## MCP 全量只读工具路由与外部注册表（2026-10-19，P4）
+
+- 范围：`DEVTRACE_MCP_ALL_TOOLS=enabled` 时把 `auth` / `quota` / `webhook` 三类诊断的 6 个只读工具改由 MCP server 托管（`mcp_` 前缀），MCP server 侧共托管 8 个只读工具；`create_support_ticket` 属于写动作，始终留在本地。新增 `backend/mcp/registry.py` 支持 `DEVTRACE_MCP_SERVERS`（JSON 数组 `{name,command,args}`，**仅 stdio**）接入外部 MCP server。默认两个开关都关闭，行为与 P4 之前一致。
+- 单元测试：150 → **201 项通过**（新增 `tests/test_mcp_all_tools.py` 26 项 + 20 subtest、`tests/test_mcp_registry.py` 25 项 + 10 subtest；本机 `.dsh-venv` Python 3.10）。路由侧覆盖：server `tools/list` 恰为 8 个只读工具且无工单工具、stdio 入口异常返回 `isError` 不崩溃、`auth`/`quota`/`webhook` 计划名全部 `mcp_*`、运行中新追加的步骤保持同一传输、工单动作保持本地、开关关闭时名称不变、**本地与 MCP 路由对同一案例产出结构一致的计划/证据/答案**、v2 版本标识重置逻辑在 MCP 拼写下同样生效、MCP 失败**不回退**本地工具、观察摘要使用"MCP 返回"、planner/verifier 一律按 base 名比较。注册表侧覆盖：空/非法/非数组配置不起子进程只告警、server 名与工具名字符集校验、默认拒绝（只读白名单命中才注册，写语义工具与写语义参数被拒）、`ext_<server>_<tool>` 命名、与内置工具重名跳过、连接/`tools/list` 失败只跳过该 server、`user_id/conversation_id/idempotency_key/ticket_id/api_key` 等 server 侧持有参数被剥离且实测只转发白名单字段（fake server 收到的参数恰为 `["query"]`）。
+- Ruff：CI `--select F` 清单新增 `developer/planner.py`、`mcp/runtime.py`、`mcp/registry.py` 与三个新测试文件；本地对 P4 全部改动文件运行 `All checks passed!`。**披露**：`mcp/tool_manager.py` 存在一处历史遗留 F402（`_validate_params` 里循环变量 `field` 遮蔽了 `dataclasses.field` 导入），已用 `git show HEAD~2:backend/mcp/tool_manager.py` 证明早于本次改动存在，按"不顺手修范围外缺陷"未改动，也因此未加入 CI 清单。
+- Docker HTTP 验证（`devtrace-verify` 栈，API 18002，`--scale worker=2`，**真实模型 `decision_mode: model`**、非规则模式；验证后 `backend/.env` 已回滚、栈 `down` 且未使用 `-v`）：
+  - 开关 `enabled`：auth → `mcp_get_request_trace / mcp_search_api_docs / mcp_inspect_key_scope`（4 条证据）；quota → `mcp_get_request_trace / mcp_search_api_docs`（3 条）；webhook → `mcp_get_webhook_delivery / mcp_search_api_docs / mcp_get_related_request_trace / mcp_search_quota_docs`（6 条）；三条计划均 `complete`。
+  - 工单案例（`req_auth_01` + "请创建工单"）：只读证据走 `mcp_*`，写动作恰为一个本地 `create_support_ticket`，响应中不存在 `mcp_create_support_ticket`，计划 `complete`、5 条证据。
+  - 关闭回归（开关置空）：同四条案例的工具名全部回到本地拼写、无任何 `mcp_` 前缀、`status` 仍 `complete`、证据数 4/3/6/5 与开关打开时一致。
+  - 验证脚本 `p4_verify_docker.py` 与报告 `.p4_docker_report.json` 在工作区根目录、不入库；脚本对上述断言全部通过（两种开关各一次）。
+- 未验证 / 边界：Docker 栈内的 MCP 调用走 `InProcessTransport`，**外部 server 的真实 stdio 子进程只用自带的 `tests/fake_ext_mcp_server.py` 在单元测试中验证**，没有接入任何真实第三方 MCP server，也没有在容器里拉起外部进程，因此"第三方 server 行为正确"未经验证——注册表提供的是边界（默认拒绝只读白名单、写语义不注册、剥离 server 侧持有参数、重名/连接失败只跳过该 server、外部工具永不进入诊断计划）。没有 HTTP/SSE 传输、没有 OAuth 或任何 server 鉴权、没有多 server 健康检查与自动重连（熔断只在 `MCPToolManager` 层）。MCP 失败不回退本地同名工具，这是设计决定：静默回退会让同一次诊断的证据来源不可追溯。全部为本机演示级验证，不构成生产就绪结论。

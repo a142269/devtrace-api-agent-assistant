@@ -13,7 +13,8 @@ Agent 从会话记忆和历史证据开始，生成诊断计划，调用文档�
 - **ReAct 与 Plan-and-Execute**：显示计划提议、服务端批准计划、工具行动、观察和状态变化；行动选择优先使用模型原生 tool calling（失败回退 JSON/规则），不展示内部推理。
 - **候选计划评分**：启用 `DEVTRACE_PLANNING_CANDIDATES` 后，对 approved / evidence-first / minimal 三种安全排序按证据覆盖、记录先于文档、依赖合法和长度打分，选最高分执行，响应暴露候选与分数；11 条规则评测 11/11。
 - **提示词版本化**：系统/计划/行动/原生工具/重试提示词集中到 `prompts.py`，带 `PROMPT_VERSION`、渲染快照与契约回归；CI 检测未审阅的提示词改动，`GET /developer/prompts` 只暴露版本与大小、不泄露正文。
-- **标准 MCP 接入**：内置 JSON-RPC 2.0 的 MCP server/client（`initialize / tools/list / tools/call`，含 stdio 入口），文档与错误手册可通过 MCP 工具调用；`DEVTRACE_MCP_PUBLIC_TOOLS=enabled` 时公开 API 路径走 MCP，规则模式 10/10 通过。
+- **标准 MCP 接入**：内置 JSON-RPC 2.0 的 MCP server/client（`initialize / tools/list / tools/call`，含 stdio 入口）。server 托管 **8 个只读工具**（平台文档、限流文档、请求记录、关联请求、密钥状态、Webhook 投递、公开文档、错误手册），`create_support_ticket` 始终留在本地——它需要用户显式授权和只有本服务持有的会话/幂等上下文。`DEVTRACE_MCP_PUBLIC_TOOLS=enabled` 时公开 API 路径走 MCP，`DEVTRACE_MCP_ALL_TOOLS=enabled` 时 `auth`/`quota`/`webhook` 的读工具全部走 MCP；计划、执行与证据校验按基础工具名比较，因此两种传输共用同一套依赖与门禁规则，MCP 调用失败记为失败步骤而不是静默回落本地工具。规则模式公开路径评测 10/10。
+- **外部 MCP server 注册表（可选）**：`DEVTRACE_MCP_SERVERS` 以 JSON 声明 stdio 进程，工具注册为 `ext_<server>_<tool>`；默认拒绝——只有读语义名称且无写提示的工具才注册，与内置同名则跳过，server 连接失败只跳过它自己；`user_id`/`conversation_id`/`idempotency_key`/`ticket_id`/`api_key` 从 schema 移除且每次调用再过滤，绝不转发给第三方进程。空配置或非法 JSON 不启动任何子进程。
 - **分层记忆与管理**：Redis 保存工作记忆与未完成计划；ChromaDB 保存隔离的情景记忆、用户画像和开发者文档；提供记忆导出与"遗忘会话"接口（清工作记忆/摘要/情景/计划检查点），并有压缩/导出/遗忘管线质量检查。
 - **可追溯工具调用**：版本化文档检索、脱敏请求记录、密钥权限摘要、Webhook 投递记录和幂等工单。
 - **公开 API 文档知识库**：内置 641 条文档——29 条官方摘要（GitHub、Stripe、OpenAI、DeepSeek、Anthropic、Gemini、通义千问、Twilio、Petstore、通用 429/503）+ 612 条从 Stripe 官方 OpenAPI 完整规格（MIT）导入的接口定义；支持按 API 检索并引用来源，提供 OpenAPI/Markdown 导入工具，且不连接真实平台。
