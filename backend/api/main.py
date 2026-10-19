@@ -97,11 +97,13 @@ async def _should_repair(redis, record: dict) -> bool:
 
 
 async def _write_task_record(redis, task_id: str, user_id: str, status: str, run_id=None,
-                             workspace: Optional[str] = None) -> dict:
+                             workspace: Optional[str] = None, trace_id: Optional[str] = None) -> dict:
     record = {'task_id': task_id, 'user_id': user_id, 'status': status, 'run_id': run_id,
               'worker_id': WORKER_ID, 'updated_at': time.time()}
     if workspace:
         record['workspace'] = workspace
+    if trace_id:
+        record['trace_id'] = trace_id
     await redis.setex(_task_key(task_id), TASK_TTL_SECONDS, json.dumps(record))
     # The index lets a restarted process find the tasks an earlier process left behind.
     if status == 'running':
@@ -285,7 +287,8 @@ def _workspace_of(user: str) -> str:
 
 
 def _workspace_match(record: dict, workspace: str) -> bool:
-    # Records written before workspace tagging carry no field and belong to `default`.
+    # Pre-tagging records carry no workspace field, so the owner still reads them from
+    # any workspace; ownership is enforced separately. Audit reads report them as `default`.
     recorded = str(record.get('workspace') or '')
     return not recorded or recorded == workspace
 
@@ -501,7 +504,9 @@ async def developer_task(task_id: str, user_id: str = Depends(current_user)):
     # but a task owned by another live replica must not be touched.
     if task_is_stale(record) and await _should_repair(_developer.redis, record):
         record = await _mark_interrupted(_developer.redis, task_id, record)
-    return {key: value for key, value in record.items() if key not in ('user_id', 'payload')}
+    # Lease bookkeeping is internal coordination, not task status.
+    return {key: value for key, value in record.items()
+            if key not in ('user_id', 'payload', 'lease_id', 'lease_until')}
 
 
 @app.get('/developer/audit', tags=['开发者助手'])
@@ -525,6 +530,70 @@ async def developer_audit(limit: int = Query(50, ge=1, le=200),
     return {'events': events, 'count': len(events)}
 
 
+async def _count_worker_heartbeats(redis) -> int:
+    """Best-effort count of live worker heartbeat keys (bounded SCAN)."""
+    count = 0
+    try:
+        async for _key in redis.scan_iter(match=f'{WORKER_KEY_PREFIX}*', count=200):
+            count += 1
+    except Exception:  # noqa: BLE001 - metrics degrade gracefully if SCAN unsupported
+        logger.warning('worker 计数 SCAN 失败', exc_info=True)
+    return count
+
+
+@app.get('/developer/dead-letter', tags=['运维'])
+async def developer_dead_letter(limit: int = Query(50, ge=1, le=200),
+                                admin: str = Depends(require_admin)):
+    """Dead-letter task summaries (admin only): id, status, attempts, error, workspace."""
+    if _developer is None:
+        raise HTTPException(503, '服务未就绪')
+    tasks = await task_queue.read_dead(_developer.redis, limit)
+    await audit.record(_developer.redis, 'dead_letter.read', actor=admin, status='success',
+                       workspace=_workspace_of(admin))
+    return {'tasks': tasks, 'count': len(tasks)}
+
+
+@app.post('/developer/tasks/{task_id}/replay', tags=['运维'])
+async def developer_replay_task(task_id: str, admin: str = Depends(require_admin)):
+    """Re-arm a dead-lettered task (admin only).
+
+    Semantics: a task is replayable only when it is currently in the dead-letter
+    list and its record is `failed`. Any other case - unknown id, missing record,
+    not failed, or not in the dead list - returns 409 without revealing whether
+    the task exists. On success the task is reset and pushed back to its queue.
+    """
+    if _developer is None:
+        raise HTTPException(503, '服务未就绪')
+    redis = _developer.redis
+    result, record = await task_queue.replay(redis, task_id)
+    workspace = str((record or {}).get('workspace') or _workspace_of(admin))
+    trace_id = str((record or {}).get('trace_id') or '')
+    if result != 'ok':
+        await audit.record(redis, 'task.replayed', actor=admin, resource=task_id,
+                           status='failure', workspace=workspace, trace_id=trace_id,
+                           detail={'status': 'failure', 'reason_code': result})
+        raise HTTPException(409, '任务不可重放（不在死信列表或状态不是失败）')
+    await audit.record(redis, 'task.replayed', actor=admin, resource=task_id,
+                       status='success', workspace=workspace, trace_id=trace_id,
+                       detail={'status': 'queued', 'attempts': 0})
+    logger.info('task replayed (trace_id=%s task_id=%s)', trace_id, task_id)
+    return {'task_id': task_id, 'status': 'queued', 'replayed': True}
+
+
+@app.get('/developer/metrics', tags=['运维'])
+async def developer_metrics(admin: str = Depends(require_admin)):
+    """Queue and worker snapshot (admin only). Bounded reads, no full SCAN of tasks."""
+    if _developer is None:
+        raise HTTPException(503, '服务未就绪')
+    redis = _developer.redis
+    metrics = await task_queue.queue_metrics(redis)
+    metrics['workers'] = await _count_worker_heartbeats(redis)
+    metrics['running'] = metrics['statuses'].get('running', 0)
+    await audit.record(redis, 'metrics.read', actor=admin, status='success',
+                       workspace=_workspace_of(admin))
+    return metrics
+
+
 def _queue_enabled() -> bool:
     return os.getenv('DEVTRACE_TASK_QUEUE', '').strip().lower() in {'1', 'true', 'yes', 'enabled', 'redis'}
 
@@ -535,21 +604,26 @@ async def _queued_stream(req: 'DeveloperChatRequest', user_id: str,
     import uuid
     conversation_id = req.conversation_id or str(uuid.uuid4())
     task_id = str(uuid.uuid4())
+    trace_id = uuid.uuid4().hex
     workspace = _workspace_of(user_id)
     audit.workspace_var.set(workspace)
+    audit.trace_id_var.set(trace_id)
     session_claimed = await task_queue.try_claim_session(
         _developer.redis, user_id, conversation_id, task_id)
     if not session_claimed:
         raise HTTPException(409, '该请求或会话正在处理中，请稍后重试')
     try:
         await task_queue.enqueue(_developer.redis, task_id, user_id,
-                                 _redact(req.message), conversation_id, workspace=workspace)
+                                 _redact(req.message), conversation_id, workspace=workspace,
+                                 trace_id=trace_id)
     except Exception:
         await task_queue.release_session(_developer.redis, user_id, conversation_id)
         raise
     await audit.record(_developer.redis, 'task.enqueued', actor=user_id, resource=task_id,
-                       status='queued', workspace=workspace,
+                       status='queued', workspace=workspace, trace_id=trace_id,
                        detail={'status': 'queued', 'attempts': 0})
+    logger.info('task enqueued (trace_id=%s task_id=%s priority=%s)',
+                trace_id, task_id, task_queue.DEFAULT_PRIORITY)
 
     async def stream():
         import time
@@ -557,7 +631,7 @@ async def _queued_stream(req: 'DeveloperChatRequest', user_id: str,
         offset = 0
         last_beat = time.monotonic()
         try:
-            yield f'event: started\ndata: {json.dumps({"task_id": task_id})}\n\n'
+            yield f'event: started\ndata: {json.dumps({"task_id": task_id, "trace_id": trace_id})}\n\n'
             while True:
                 for raw in await task_queue.read_events(_developer.redis, task_id, offset):
                     offset += 1
@@ -613,19 +687,21 @@ async def developer_chat_stream(req: DeveloperChatRequest, user_id: str = Depend
     async def stream():
         import uuid
         task_id = str(uuid.uuid4())
+        trace_id = uuid.uuid4().hex
         terminal = False
         queue: asyncio.Queue = asyncio.Queue()
         # The generator is iterated in the response task, so tag the context here
         # as well for tool events emitted during the run.
         audit.workspace_var.set(workspace)
+        audit.trace_id_var.set(trace_id)
 
         async def record_task(status, run_id=None):
             await _write_task_record(_developer.redis, task_id, user_id, status, run_id,
-                                     workspace=workspace)
+                                     workspace=workspace, trace_id=trace_id)
 
         async def audit_finish(status):
             await audit.record(_developer.redis, 'task.finished', actor=user_id, resource=task_id,
-                               status=status, workspace=workspace,
+                               status=status, workspace=workspace, trace_id=trace_id,
                                detail={'status': status, 'attempts': 1})
 
         async def execute():
@@ -670,7 +746,7 @@ async def developer_chat_stream(req: DeveloperChatRequest, user_id: str = Depend
         await record_task('running')
         task = asyncio.create_task(execute())
         try:
-            yield f'event: started\ndata: {json.dumps({"task_id": task_id})}\n\n'
+            yield f'event: started\ndata: {json.dumps({"task_id": task_id, "trace_id": trace_id})}\n\n'
             while True:
                 try:
                     kind, data = await asyncio.wait_for(queue.get(), timeout=15)
