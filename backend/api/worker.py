@@ -11,11 +11,17 @@ import logging
 import time
 
 from api import main as api_main
+from developer import audit
 from developer import task_queue
 from developer.events import event_sink
 
 logger = logging.getLogger(__name__)
 logging.basicConfig(level=logging.INFO, format='%(asctime)s %(levelname)s %(name)s %(message)s')
+
+
+async def _audit_finished(redis, task_id: str, user_id: str, status: str, attempts) -> None:
+    await audit.record(redis, 'task.finished', actor=user_id, resource=task_id, status=status,
+                       detail={'status': status, 'attempts': attempts})
 
 
 async def process_one(assistant, redis, task_id: str) -> None:
@@ -26,9 +32,11 @@ async def process_one(assistant, redis, task_id: str) -> None:
     user_id = record.get('user_id') or 'anonymous'
     conversation_id = payload.get('conversation_id') or ''
     message = payload.get('message') or ''
+    attempts = int(record.get('attempts') or 0)
     if record.get('cancel_requested'):
         await task_queue.update_task(redis, task_id, status='cancelled', finished_at=time.time())
         await task_queue.release_session(redis, user_id, conversation_id)
+        await _audit_finished(redis, task_id, user_id, 'cancelled', attempts)
         return
     await task_queue.update_task(
         redis, task_id, status='running', worker_id=api_main.WORKER_ID, started_at=time.time())
@@ -44,25 +52,31 @@ async def process_one(assistant, redis, task_id: str) -> None:
             await task_queue.update_task(redis, task_id, status='cancelled',
                                          finished_at=time.time())
             terminal = True
+            await _audit_finished(redis, task_id, user_id, 'cancelled', attempts)
             return
         status = 'waiting' if (result.get('plan') or {}).get('status') == 'waiting' else 'completed'
         await task_queue.update_task(
             redis, task_id, status=status, run_id=result.get('run_id'),
             finished_at=time.time(), error=None)
         terminal = True
+        await _audit_finished(redis, task_id, user_id, status, attempts)
     except asyncio.CancelledError:
         await task_queue.update_task(redis, task_id, status='cancelled',
                                      finished_at=time.time())
         terminal = True
+        await _audit_finished(redis, task_id, user_id, 'cancelled', attempts)
         raise
     except Exception as exc:  # noqa: BLE001 - worker boundary
         logger.exception('task %s failed', task_id)
         if (await task_queue.get_task(redis, task_id) or {}).get('cancel_requested'):
             await task_queue.update_task(redis, task_id, status='cancelled',
                                          finished_at=time.time())
+            await _audit_finished(redis, task_id, user_id, 'cancelled', attempts)
         else:
             state = await task_queue.requeue_or_fail(redis, task_id, str(exc))
             terminal = state != 'queued'
+            if terminal:
+                await _audit_finished(redis, task_id, user_id, 'failed', attempts + 1)
     finally:
         event_sink.reset(token)
         if terminal:

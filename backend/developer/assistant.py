@@ -22,6 +22,7 @@ logger = logging.getLogger(__name__)
 model_metrics = contextvars.ContextVar('developer_model_metrics', default=None)
 
 from developer.error_playbooks import lookup_playbook
+from developer import audit
 from developer.planner import (KIND_TO_TOOLS, PUBLIC_API_MCP_TOOLS, TOOL_EVIDENCE, TOOL_SCHEMAS,
                                TOOL_TITLES, _approved_tools, _ready_steps,
                                build_plan_candidates, choose_plan_candidate)
@@ -658,6 +659,11 @@ class DeveloperAssistant:
                       "summary": self._observation_summary(tool, data, result.error), "source": source,
                       "result": data, "error": result.error or "", "latency_ms": round(result.latency_ms, 1),
                       "tainted": bool(observation_flags)}
+            # Audit carries the tool outcome only — never the observation payload itself.
+            await audit.record(self.redis, 'tool.call', actor=user_id, resource=run_id,
+                               status='success' if action['success'] else 'failure',
+                               detail={'tool': tool, 'success': action['success'],
+                                       'latency_ms': action['latency_ms']})
             state["actions"].append(action)
             state["timeline"].append({"type": "observation", "text": action["summary"], "step_id": pending["id"]})
             pending["status"] = "done" if result.success and data else "failed"

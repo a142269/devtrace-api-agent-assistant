@@ -4,6 +4,7 @@ import hashlib
 import json
 import logging
 import os
+import re
 import socket
 import time
 import uuid
@@ -12,15 +13,16 @@ from pathlib import Path
 from typing import Optional
 
 from dotenv import load_dotenv
-from fastapi import Depends, FastAPI, Header, HTTPException, Request
+from fastapi import Depends, FastAPI, Header, HTTPException, Query, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 from fastapi.security import HTTPAuthorizationCredentials
 from pydantic import BaseModel, ConfigDict, Field
 from redis.exceptions import LockError
 
-from api.auth import authenticated_user, bearer, issue_token, settings as auth_settings, verify_password
+from api.auth import authenticated_user, bearer, issue_token, require_admin, settings as auth_settings, verify_password
 from core.skill_loader import SkillManager
+from developer import audit
 from developer import task_queue
 from developer.assistant import AnthropicDecisionModel, DeveloperAssistant, RuleDecisionModel, _redact
 from developer.data import DOCS
@@ -254,6 +256,25 @@ app.add_middleware(CORSMiddleware,
     allow_origins=[s.strip() for s in os.getenv('DEVTRACE_CORS_ORIGINS', 'http://localhost:5173').split(',') if s.strip()],
     allow_methods=['GET', 'POST'], allow_headers=['Authorization', 'Content-Type', 'Idempotency-Key'])
 
+_REQUEST_ID_HEADER = re.compile(r'^[A-Za-z0-9_.:-]{1,64}$')
+
+
+@app.middleware('http')
+async def attach_request_id(request: Request, call_next):
+    """Give every request an id, echo it back, and tag audit events raised while serving it."""
+    supplied = request.headers.get('X-Request-ID', '')
+    request_id = supplied if _REQUEST_ID_HEADER.fullmatch(supplied) else uuid.uuid4().hex
+    audit.request_id_var.set(request_id)
+    audit.remote_var.set(request.client.host if request.client else 'unknown')
+    request.state.request_id = request_id
+    response = await call_next(request)
+    response.headers['X-Request-ID'] = request_id
+    return response
+
+
+def _remote(request: Optional[Request]) -> str:
+    return request.client.host if request is not None and request.client else 'unknown'
+
 class DeveloperChatRequest(BaseModel):
     model_config = ConfigDict(extra='forbid')
     message: str = Field(min_length=1, max_length=4000)
@@ -283,7 +304,11 @@ async def login(req: LoginRequest, request: Request):
     # Perform the same password derivation for unknown users to reduce account enumeration.
     encoded = request.app.state.users.get(req.username, 'pbkdf2_sha256$' + '00' * 16 + '$' + '00' * 32)
     if not verify_password(req.password, encoded) or req.username not in request.app.state.users:
+        await audit.record(_developer.redis, 'auth.login.failure', actor=req.username,
+                           status='failure', remote=_remote(request))
         raise HTTPException(401, '用户名或密码错误')
+    await audit.record(_developer.redis, 'auth.login.success', actor=req.username,
+                       status='success', remote=_remote(request))
     return {'access_token': issue_token(req.username, request.app.state.jwt_secret), 'token_type': 'bearer', 'expires_in': 3600}
 
 @app.get("/health")
@@ -296,6 +321,7 @@ async def health():
 @app.get('/developer/prompts', tags=['开发者助手'])
 async def developer_prompts(user_id: str = Depends(current_user)):
     """Prompt version and sizes only; never expose full system prompts."""
+    await audit.record(_developer.redis, 'prompts.read', actor=user_id, status='success')
     return describe_prompts()
 
 @app.post("/developer/chat", tags=["开发者助手"])
@@ -327,11 +353,23 @@ async def developer_chat(req: DeveloperChatRequest, user_id: str = Depends(curre
                     raise HTTPException(409, '幂等键已用于其他请求')
                 return record['response']
         try:
+            started = time.perf_counter()
             result = await asyncio.wait_for(_developer.run(req.message, user_id, conversation_id), timeout=150)
         except asyncio.TimeoutError:
+            await audit.record(_developer.redis, 'chat.sync', actor=user_id, status='failure',
+                               detail={'reason_code': 'timeout'})
             raise HTTPException(504, '诊断超时，请使用同一会话重试')
+        except Exception:
+            await audit.record(_developer.redis, 'chat.sync', actor=user_id, status='failure',
+                               detail={'reason_code': 'error'})
+            raise
         if idem_key:
             await _developer.redis.setex(idem_key, 86400, json.dumps({'payload_hash': payload_hash, 'response': result}, ensure_ascii=False))
+        await audit.record(
+            _developer.redis, 'chat.sync', actor=user_id, resource=str(result.get('run_id') or ''),
+            status='success',
+            detail={'kind': str(result.get('kind') or ''),
+                    'latency_ms': round((time.perf_counter() - started) * 1000, 1)})
         return result
     finally:
         # A disconnected SSE client cancels this task; shield the release so the
@@ -349,7 +387,10 @@ async def developer_memory(conversation_id: str, user_id: str = Depends(current_
     """Export this user's persisted memory for one conversation."""
     if _developer is None:
         raise HTTPException(503, '开发者助手未就绪')
-    return await _developer.memory.export_memory(user_id, conversation_id)
+    result = await _developer.memory.export_memory(user_id, conversation_id)
+    await audit.record(_developer.redis, 'memory.export', actor=user_id,
+                       resource=conversation_id, status='success')
+    return result
 
 
 @app.delete('/developer/memory/{conversation_id}', tags=['开发者助手'])
@@ -362,6 +403,8 @@ async def developer_memory_delete(conversation_id: str, user_id: str = Depends(c
         f'{user_id}\0{conversation_id}'.encode()).hexdigest()
     deleted_plan = await _developer.redis.delete(plan_key)
     result['plan_deleted'] = bool(deleted_plan)
+    await audit.record(_developer.redis, 'memory.delete', actor=user_id,
+                       resource=conversation_id, status='success')
     return result
 
 
@@ -415,6 +458,24 @@ async def developer_task(task_id: str, user_id: str = Depends(current_user)):
     return {key: value for key, value in record.items() if key not in ('user_id', 'payload')}
 
 
+@app.get('/developer/audit', tags=['开发者助手'])
+async def developer_audit(limit: int = Query(50, ge=1, le=200),
+                          user: str = Query('', max_length=120),
+                          event: str = Query('', max_length=64),
+                          admin: str = Depends(require_admin)):
+    """Newest-first audit events (admin only). Out-of-range limit is rejected with 422.
+
+    The stream is append-only at the application layer; Redis itself is not WORM
+    storage, so this is an operational log, not a tamper-proof record.
+    """
+    if _developer is None:
+        raise HTTPException(503, '服务未就绪')
+    events = await audit.read(_developer.redis, limit, user=user.strip(), event=event.strip())
+    await audit.record(_developer.redis, 'audit.read', actor=admin, status='success',
+                       detail={'kind': 'audit.query'})
+    return {'events': events, 'count': len(events)}
+
+
 def _queue_enabled() -> bool:
     return os.getenv('DEVTRACE_TASK_QUEUE', '').strip().lower() in {'1', 'true', 'yes', 'enabled', 'redis'}
 
@@ -435,6 +496,8 @@ async def _queued_stream(req: 'DeveloperChatRequest', user_id: str,
     except Exception:
         await task_queue.release_session(_developer.redis, user_id, conversation_id)
         raise
+    await audit.record(_developer.redis, 'task.enqueued', actor=user_id, resource=task_id,
+                       status='queued', detail={'status': 'queued', 'attempts': 0})
 
     async def stream():
         import time
@@ -502,12 +565,18 @@ async def developer_chat_stream(req: DeveloperChatRequest, user_id: str = Depend
         async def record_task(status, run_id=None):
             await _write_task_record(_developer.redis, task_id, user_id, status, run_id)
 
+        async def audit_finish(status):
+            await audit.record(_developer.redis, 'task.finished', actor=user_id, resource=task_id,
+                               status=status, detail={'status': status, 'attempts': 1})
+
         async def execute():
             nonlocal terminal
             reset_token = event_sink.set(lambda event: queue.put_nowait(('timeline', event)))
             try:
                 result = await developer_chat(req, user_id, idempotency_key)
-                await record_task('waiting' if result.get('plan', {}).get('status') == 'waiting' else 'completed', result.get('run_id'))
+                status = 'waiting' if result.get('plan', {}).get('status') == 'waiting' else 'completed'
+                await record_task(status, result.get('run_id'))
+                await audit_finish(status)
                 terminal = True
                 await queue.put(('complete', result))
             except asyncio.CancelledError:
@@ -515,6 +584,7 @@ async def developer_chat_stream(req: DeveloperChatRequest, user_id: str = Depend
                 # through shield keeps the record from staying `running`.
                 try:
                     await asyncio.shield(record_task('cancelled'))
+                    await asyncio.shield(audit_finish('cancelled'))
                 except BaseException:
                     pass
                 terminal = True
@@ -522,11 +592,13 @@ async def developer_chat_stream(req: DeveloperChatRequest, user_id: str = Depend
             except HTTPException as exc:
                 logger.warning('流式诊断请求失败: %s %s', exc.status_code, exc.detail)
                 await record_task('failed')
+                await audit_finish('failed')
                 terminal = True
                 await queue.put(('error', {'status': exc.status_code, 'detail': exc.detail}))
             except Exception:
                 logger.exception('流式诊断执行异常')
                 await record_task('failed')
+                await audit_finish('failed')
                 terminal = True
                 await queue.put(('error', {'status': 500, 'detail': '诊断执行失败，请稍后重试'}))
             finally:
@@ -560,6 +632,7 @@ async def developer_chat_stream(req: DeveloperChatRequest, user_id: str = Depend
                 await asyncio.gather(task, return_exceptions=True)
                 if not terminal:
                     await record_task('cancelled')
+                    await audit_finish('cancelled')
 
             # Starlette cancels the response task when the client disconnects, so the
             # cleanup must run in its own shielded task or the status stays `running`.
