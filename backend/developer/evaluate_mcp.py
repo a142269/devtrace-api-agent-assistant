@@ -114,8 +114,10 @@ async def evaluate():
         "passed": sum(int(row["passed"]) for row in rows),
         "cases": rows,
         "limitations": (
-            "In-process MCP transport (stdio transport is implemented but not exercised here); "
-            "rules mode only; the MCP server hosts two documentation tools, not the full tool set."
+            "In-process MCP transport (stdio transport is implemented and covered by "
+            "tests/test_mcp_all_tools.py, but not exercised here); rules mode only; the "
+            "MCP server hosts eight read tools, and the diagnosis path only routes them "
+            "when DEVTRACE_MCP_ALL_TOOLS is enabled. Ticket creation stays local."
         ),
     }
 

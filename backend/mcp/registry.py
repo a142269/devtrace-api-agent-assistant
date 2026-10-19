@@ -79,15 +79,20 @@ def parse_servers_config(raw: str) -> List[Dict[str, Any]]:
     return entries
 
 
+def _words(text: str) -> str:
+    """Split snake/camel/dotted identifiers so a hint verb is a real word boundary."""
+    return re.sub(r"(?<=[a-z0-9])(?=[A-Z])|[^A-Za-z0-9]+", " ", str(text or "")).lower()
+
+
 def tool_hints(name: str, description: str, schema: Dict[str, Any]) -> Tuple[str, ...]:
     """Classify a server tool: 'read', 'write' or 'unknown', plus write hints found."""
-    text = f"{name} {description}"
+    text = f"{_words(name)} {_words(description)}"
     for param in (schema or {}).get("properties", {}):
-        if WRITE_HINTS.search(str(param)):
+        if WRITE_HINTS.search(_words(param)):
             return "write", ("parameter",)
     write_matches = WRITE_HINTS.findall(text)
     if write_matches:
-        return "write", tuple(sorted({m.lower() for m in write_matches}))
+        return "write", tuple(sorted({match.lower() for match in write_matches}))
     if READ_HINTS.search(text):
         return "read", ()
     return "unknown", ()

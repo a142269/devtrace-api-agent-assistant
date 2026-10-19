@@ -568,10 +568,13 @@ class DeveloperAssistant:
             state['require_version_observation'] = True
             if state.get('api_version', 'v1') != 'v2':
                 for step in state['steps']:
-                    if step['tool'] == 'search_api_docs' and step['status'] == 'done':
+                    if base_tool(step['tool']) == 'search_api_docs' and step['status'] == 'done':
                         step['status'] = 'pending'
-                        state['actions'] = [a for a in state['actions'] if a['tool'] != 'search_api_docs']
-                        state['evidence'] = [e for e in state['evidence'] if not e.startswith(('search_api_docs:', 'doc:'))]
+                        state['actions'] = [a for a in state['actions']
+                                            if base_tool(a['tool']) != 'search_api_docs']
+                        state['evidence'] = [e for e in state['evidence']
+                                             if base_tool(e.split(':', 1)[0]) not in
+                                             ('search_api_docs',) and not e.startswith('doc:')]
                         state['timeline'].append({'type': 'revision', 'text': '标识显示可能是 v2，移除未确认版本的文档证据并重新核验'})
         if security_flags:
             state['timeline'].append({
