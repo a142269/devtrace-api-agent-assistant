@@ -21,7 +21,8 @@ Agent 从会话记忆和历史证据开始，生成诊断计划，调用文档�
 - **证据驱动诊断**：多条带来源的假设，区分"被观察支持""被证据否定""仅观察到"；请求记录与密钥状态互相矛盾时显式报告证据冲突，关联请求成功时用排除法而不是默认因果关系。
 - **安全边界**：API Key 脱敏，工具参数从用户输入或已观察记录取得；工单必须由用户明确授权；用户文本与工具观察中的指令会在时间线中标记为不可信数据，不会作为工具指令执行。依赖侧已做漏洞核查：ChromaDB 3 条漏洞上游暂无修复版本，保持内部网络隔离并加了 CI 审计门禁，详见[依赖与安全评估](backend/developer/依赖与安全评估_2026-10-18.md)。
 - **RBAC 与审计日志**：`DEVTRACE_ADMIN_USERS` 定义管理员（服务端判定，角色不进 JWT）；Redis Stream `developer:audit` 应用层只追加登录、chat、任务、工具调用、记忆与提示词事件，`detail` 走字段白名单并对疑似密钥脱敏，绝不含消息正文或工具结果；`GET /developer/audit`（仅管理员，最新优先、limit 1–200、用户/事件过滤）。审计写入 best-effort，Redis 故障不阻断任何主流程。Redis 不是 WORM 存储，该日志定位是"应用层只追加的运维审计"，不是不可篡改存证。
-- **工程化验证**：开发者 Agent 自动化测试 115 项；新增 19 条手写标签的独立 holdout 集（冲突/注入/异常/多轮），规则模式与真实模型模式均为 19/19；新增 12 条跨轮任务记忆评测（恢复 vs 重开均 12/12，恢复模式少约 0.91 次重复文档检索）；2026-10-18 已在本机 Docker 全栈复验规则模式 HTTP 30/30、SSE、断流释放锁、并发 409 与跨轮恢复，并用 Playwright 在桌面/移动端完成联调，另做键盘导航、焦点可见、抽样对比度（WCAG AA）与基础性能检查。历史评测结果详见评测报告。
+- **工作区隔离（P2）**：`DEVTRACE_USERS_JSON` 支持 workspace 感知的新格式（`{"user": {"password": "...", "workspace": "acme"}}`），旧格式完全兼容并归入 `default`；workspace 由服务端配置解析，**不写入 JWT**。run/task 记录携带归属 workspace，跨 workspace 读取一律 404（不泄露存在性）；审计事件带 workspace 字段（旧事件视为 `default`），管理员查询支持 `?workspace=` 过滤。记忆仍按 user+conversation 隔离，workspace 只是上层归属；未做共享 workspace 成员/协作，也未按 workspace 重新分区 ChromaDB。
+- **工程化验证**：开发者 Agent 自动化测试 128 项；新增 19 条手写标签的独立 holdout 集（冲突/注入/异常/多轮），规则模式与真实模型模式均为 19/19；新增 12 条跨轮任务记忆评测（恢复 vs 重开均 12/12，恢复模式少约 0.91 次重复文档检索）；2026-10-18 已在本机 Docker 全栈复验规则模式 HTTP 30/30、SSE、断流释放锁、并发 409 与跨轮恢复，并用 Playwright 在桌面/移动端完成联调，另做键盘导航、焦点可见、抽样对比度（WCAG AA）与基础性能检查。历史评测结果详见评测报告。
 - **组合故障与运行记录**：`delivery_combo_01` 会触发关联请求与限流文档检查；登录后可查看最近运行，逐步观察工具执行，并查看模型及工具调用耗时。
 - **持久流式任务**：SSE 诊断由 Redis 队列 + 独立 worker（`python -m api.worker`）执行；API 重启不丢排队任务，worker 崩溃后启动时回收中断任务，失败重试一次、耗尽进死信；任务状态与事件都可在 Redis 查询。
 
@@ -55,7 +56,7 @@ frontend/  Vue 3 + Vite 对话页，展示计划、行动、证据和记忆使�
 4. 在 `frontend/` 执行 `npm ci && npm run dev`。若后端不在默认 8000 端口，用 `VITE_PYTHON_API_URL` 指定，例如 `$env:VITE_PYTHON_API_URL='http://127.0.0.1:18002'; npm run dev -- --port 5174`。
 5. 登录后使用 `req_auth_01`、`req_quota_01` 或 `delivery_01` 演示。
 
-接口使用本地配置账号登录并签发短期 JWT，身份由服务端验证；管理员角色由 `DEVTRACE_ADMIN_USERS` 服务端判定，`GET /developer/audit` 返回应用层只追加的审计事件；同一用户的会话通过 Redis 锁防止并发覆盖，重复请求可携带 `Idempotency-Key`。模拟平台仅在 Compose 内部网络访问。当前实现仍是单租户本地演示：多租户/工作区隔离、生产身份服务与真实业务权限仍未实现。
+接口使用本地配置账号登录并签发短期 JWT，身份由服务端验证；管理员角色由 `DEVTRACE_ADMIN_USERS` 服务端判定，`GET /developer/audit` 返回应用层只追加的审计事件；同一用户的会话通过 Redis 锁防止并发覆盖，重复请求可携带 `Idempotency-Key`。模拟平台仅在 Compose 内部网络访问。用户可归属到服务端配置的工作区（跨工作区读取 404、审计按工作区过滤），但这仍是本地演示：没有共享工作区的成员/协作、生产身份服务与真实业务权限，ChromaDB 也未按工作区分区。
 
 详细设计、工程审查、评测原始结果见 [backend/developer](backend/developer)。
 本轮优化的实现范围、测试结果和剩余工作见 [升级进度](backend/developer/升级进度.md)。
