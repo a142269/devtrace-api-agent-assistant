@@ -77,38 +77,72 @@ class MCPServer:
                 "error": {"code": code, "message": message}}
 
 
-def build_default_server() -> MCPServer:
-    from developer.error_playbooks import lookup_playbook
-    from developer.planner import TOOL_SCHEMAS
-    from developer.public_knowledge import PublicDocsKnowledge
+def build_default_server(runtime: Any = None) -> MCPServer:
+    """Host the read-only tools; ``create_support_ticket`` stays local on purpose.
 
-    knowledge = PublicDocsKnowledge()
+    A ticket needs explicit user authorization plus the conversation and idempotency
+    context that only the server holds, so it must not become an MCP tool parameter.
+    """
+    from developer.planner import TOOL_SCHEMAS, TOOL_TITLES
+    from mcp.runtime import build_runtime_from_env
 
-    def search_public_docs(arguments):
-        return knowledge.search(arguments.get("query", ""), api=arguments.get("api", ""),
-                                top_k=arguments.get("top_k", 4))
+    active = runtime if runtime is not None else build_runtime_from_env()
 
-    def lookup_error(arguments):
-        status = arguments.get("http_status")
-        return lookup_playbook(arguments.get("symptom", ""), api=arguments.get("api", ""),
-                               http_status=int(status) if status else None,
-                               top_k=arguments.get("top_k", 3))
+    async def search_api_docs(arguments):
+        return await active.search_api_docs(arguments.get("query", ""),
+                                            top_k=arguments.get("top_k", 3))
+
+    async def search_quota_docs(arguments):
+        return await active.search_quota_docs(arguments.get("query", ""),
+                                              top_k=arguments.get("top_k", 3))
+
+    async def get_request_trace(arguments):
+        return await active.get_request_trace(arguments.get("request_id", ""))
+
+    async def get_related_request_trace(arguments):
+        return await active.get_related_request_trace(arguments.get("request_id", ""))
+
+    async def inspect_key_scope(arguments):
+        return await active.inspect_key_scope(arguments.get("key_prefix", ""))
+
+    async def get_webhook_delivery(arguments):
+        return await active.get_webhook_delivery(arguments.get("delivery_id", ""))
+
+    async def search_public_docs(arguments):
+        return await active.search_public_docs(arguments.get("query", ""), api=arguments.get("api", ""),
+                                               top_k=arguments.get("top_k", 4))
+
+    async def lookup_error(arguments):
+        return await active.lookup_error_playbook(arguments.get("symptom", ""), api=arguments.get("api", ""),
+                                                  http_status=arguments.get("http_status"),
+                                                  top_k=arguments.get("top_k", 3))
 
     server = MCPServer()
-    server.register("search_public_docs", "Search public API documentation summaries",
-                    TOOL_SCHEMAS["search_public_docs"], search_public_docs)
-    server.register("lookup_error_playbook", "Look up error remediation playbooks",
-                    TOOL_SCHEMAS["lookup_error_playbook"], lookup_error)
+    handlers = {
+        "search_api_docs": search_api_docs,
+        "search_quota_docs": search_quota_docs,
+        "get_request_trace": get_request_trace,
+        "get_related_request_trace": get_related_request_trace,
+        "inspect_key_scope": inspect_key_scope,
+        "get_webhook_delivery": get_webhook_delivery,
+        "search_public_docs": search_public_docs,
+        "lookup_error_playbook": lookup_error,
+    }
+    for name, handler in handlers.items():
+        server.register(name, TOOL_TITLES[name], TOOL_SCHEMAS[name], handler)
     return server
 
 
 async def _stdio_loop() -> None:
+    """Serve newline-delimited JSON-RPC over stdin/stdout.
+
+    Lines are read on a worker thread because the Windows proactor loop cannot attach
+    ``connect_read_pipe`` to a redirected stdin handle, which would hang the process.
+    """
     server = build_default_server()
     loop = asyncio.get_running_loop()
-    reader = asyncio.StreamReader()
-    await loop.connect_read_pipe(lambda: asyncio.StreamReaderProtocol(reader), sys.stdin)
     while True:
-        line = await reader.readline()
+        line = await loop.run_in_executor(None, sys.stdin.buffer.readline)
         if not line:
             break
         try:

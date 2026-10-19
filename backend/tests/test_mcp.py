@@ -77,7 +77,10 @@ class MCPTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("tools", info["capabilities"])
         tools = await self.client.list_tools()
         self.assertEqual({tool["name"] for tool in tools},
-                         {"search_public_docs", "lookup_error_playbook"})
+                         {"search_api_docs", "search_quota_docs", "get_request_trace",
+                          "get_related_request_trace", "inspect_key_scope",
+                          "get_webhook_delivery", "search_public_docs", "lookup_error_playbook"})
+        self.assertNotIn("create_support_ticket", {tool["name"] for tool in tools})
         self.assertIn("inputSchema", tools[0])
 
     async def test_call_tool_returns_structured_result(self):
