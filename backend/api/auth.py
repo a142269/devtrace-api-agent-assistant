@@ -4,6 +4,7 @@ import hmac
 import json
 import logging
 import os
+import re
 import time
 from typing import Optional
 
@@ -13,6 +14,8 @@ from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 
 bearer = HTTPBearer(auto_error=False)
 ITERATIONS = 310_000
+DEFAULT_WORKSPACE = 'default'
+_WORKSPACE_NAME = re.compile(r'^[A-Za-z0-9_-]{1,40}$')
 logger = logging.getLogger(__name__)
 
 
@@ -30,17 +33,45 @@ def verify_password(password: str, encoded: str) -> bool:
         return False
 
 
-def settings() -> tuple[str, dict]:
+def parse_user_config(raw: dict) -> tuple[dict, dict]:
+    """Split the configured users map into (username -> password hash, username -> workspace).
+
+    Both formats are supported: the legacy ``{"alice": "pbkdf2_sha256$..."}`` and the
+    workspace-aware ``{"alice": {"password": "pbkdf2_sha256$...", "workspace": "acme"}}``.
+    Workspaces are resolved server-side only; they never travel inside the JWT.
+    """
+    users: dict = {}
+    workspaces: dict = {}
+    for name, value in raw.items():
+        if not isinstance(name, str) or not name or len(name) > 120:
+            raise RuntimeError('Invalid configured users')
+        if isinstance(value, str):
+            users[name] = value
+            workspaces[name] = DEFAULT_WORKSPACE
+            continue
+        if isinstance(value, dict):
+            if not set(value) <= {'password', 'workspace'} or not isinstance(value.get('password'), str):
+                raise RuntimeError('Invalid configured users')
+            workspace = value.get('workspace') or DEFAULT_WORKSPACE
+            if not isinstance(workspace, str) or not _WORKSPACE_NAME.fullmatch(workspace):
+                raise RuntimeError('Invalid configured users')
+            users[name] = value['password']
+            workspaces[name] = workspace
+            continue
+        raise RuntimeError('Invalid configured users')
+    return users, workspaces
+
+
+def settings() -> tuple[str, dict, dict]:
     secret = os.getenv('DEVTRACE_JWT_SECRET', '')
     try:
-        users = json.loads(os.getenv('DEVTRACE_USERS_JSON', '{}'))
+        raw = json.loads(os.getenv('DEVTRACE_USERS_JSON', '{}'))
     except json.JSONDecodeError as exc:
         raise RuntimeError('DEVTRACE_USERS_JSON must be valid JSON') from exc
-    if len(secret.encode()) < 32 or not isinstance(users, dict) or not users:
+    if len(secret.encode()) < 32 or not isinstance(raw, dict) or not raw:
         raise RuntimeError('Set DEVTRACE_JWT_SECRET (at least 32 bytes) and DEVTRACE_USERS_JSON')
-    if any(not isinstance(k, str) or not k or len(k) > 120 or not isinstance(v, str) for k, v in users.items()):
-        raise RuntimeError('Invalid configured users')
-    return secret, users
+    users, workspaces = parse_user_config(raw)
+    return secret, users, workspaces
 
 
 def issue_token(user_id: str, secret: str) -> str:
@@ -60,6 +91,11 @@ def authenticated_user(request: Request, credentials: HTTPAuthorizationCredentia
         return user
     except (jwt.PyJWTError, ValueError, KeyError):
         raise HTTPException(401, '登录凭证无效或已过期', headers={'WWW-Authenticate': 'Bearer'})
+
+
+def workspace_for(workspaces: dict, user: str) -> str:
+    """Server-side workspace mapping; users missing from the map fall back to `default`."""
+    return workspaces.get(user) or DEFAULT_WORKSPACE
 
 
 def admin_names(users: dict) -> set:
