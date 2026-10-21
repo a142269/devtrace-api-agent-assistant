@@ -342,22 +342,84 @@ class ProfileEndpointTests(unittest.IsolatedAsyncioTestCase):
 
 
 class LiveQualityRubricTests(unittest.IsolatedAsyncioTestCase):
-    def test_planted_facts_survive_a_good_summary(self):
+    """One session is scored twice: strict is verbatim, semantic is per fact category."""
+
+    @staticmethod
+    def verbatim(case):
+        return (f'{case.request_id} 使用 {case.key_prefix}（{case.scope}），'
+                f'结论是{case.conclusion}。')
+
+    @staticmethod
+    def paraphrase(case):
+        """Satisfies the category rubric with synonyms, yet never quotes the strings."""
+        resource, _, action = case.scope.partition(':')
+        parts = [case.request_id, case.key_prefix, resource,
+                 '只读' if action == 'read' else '写入']
+        parts += [group[0] for group in case.concept_groups]
+        parts += list(case.required_tokens)
+        return '，'.join(parts) + '。'
+
+    def test_verbatim_summary_passes_both_rubrics(self):
+        for case in CASES:
+            scored = score_case(case, self.verbatim(case), 900)
+            with self.subTest(case=case.name):
+                for rubric in ('strict', 'semantic'):
+                    self.assertTrue(scored[rubric]['perfect'], scored[rubric]['missing_facts'])
+                    self.assertEqual(scored[rubric]['missing_facts'], [])
+                self.assertEqual(scored['fabricated_identifiers'], [])
+                self.assertTrue(scored['within_summary_limit'])
+
+    def test_semantic_equivalent_summary_passes_while_strict_fails(self):
+        for case in CASES:
+            scored = score_case(case, self.paraphrase(case), 900)
+            with self.subTest(case=case.name):
+                self.assertTrue(scored['semantic']['perfect'], scored['semantic']['missing_facts'])
+                self.assertFalse(scored['strict']['perfect'])
+                self.assertEqual(scored['strict']['facts_retained'], 1)
+                self.assertEqual(scored['strict']['missing_facts'],
+                                 [case.key_prefix, case.conclusion])
+
+    def test_negated_conclusion_is_never_a_retained_fact(self):
         case = CASES[0]
-        summary = (f'{case.request_id} 使用 {case.key_prefix}（{case.scope}），'
-                   f'结论是{case.conclusion}。')
-        scored = score_case(case, summary, 1200)
-        self.assertEqual(scored['facts_retained'], scored['facts_total'])
-        self.assertEqual(scored['missing_facts'], [])
-        self.assertEqual(scored['fabricated_identifiers'], [])
-        self.assertTrue(scored['within_summary_limit'])
+        summary = (f'{case.request_id} 和 {case.key_prefix} 都没问题，{case.scope} 也在，'
+                   '凭证未过期，也不需轮换。')
+        scored = score_case(case, summary, 900)
+        self.assertFalse(scored['semantic']['conclusion'])
+        self.assertFalse(scored['strict']['conclusion'])
+        self.assertTrue(scored['semantic']['identifier'])
+        self.assertTrue(scored['semantic']['key_permissions'])
+        self.assertEqual(scored['semantic']['missing_facts'], [case.conclusion])
+        self.assertFalse(scored['semantic']['perfect'])
+
+    def test_negation_still_allows_an_affirmative_restatement(self):
+        case = CASES[0]
+        summary = (f'{case.request_id} / {case.key_prefix} / {case.scope}：'
+                   '一开始以为凭证未过期，核对状态后确认已失效，需要轮换。')
+        self.assertTrue(score_case(case, summary, 900)['semantic']['conclusion'])
+
+    def test_scope_synonym_counts_but_the_wrong_action_does_not(self):
+        case = CASES[0]
+        read_only = f'{case.request_id} {case.key_prefix} logs 只读 {case.conclusion}'
+        self.assertTrue(score_case(case, read_only, 900)['semantic']['key_permissions'])
+        self.assertFalse(score_case(case, read_only, 900)['strict']['key_permissions'])
+        write = f'{case.request_id} {case.key_prefix} logs 写入权限 {case.conclusion}'
+        self.assertFalse(score_case(case, write, 900)['semantic']['key_permissions'])
+
+    def test_identifier_must_stay_verbatim(self):
+        case = CASES[0]
+        loose = f'请求 101 的 {case.key_prefix}（{case.scope}）{case.conclusion}'
+        scored = score_case(case, loose, 900)
+        self.assertFalse(scored['semantic']['identifier'])
+        self.assertFalse(scored['strict']['identifier'])
+        self.assertEqual(scored['semantic']['missing_facts'], [case.request_id])
 
     def test_invented_identifiers_and_thin_summaries_are_flagged(self):
         case = CASES[2]
         thin = '这个问题可能是配置引起的，建议检查设置。'
         scored = score_case(case, thin + ' req_fabricated_999 sk_fabricated_zz', 50)
-        self.assertEqual(scored['facts_retained'], 0)
-        self.assertEqual(len(scored['missing_facts']), len(case.facts))
+        self.assertEqual(scored['strict']['facts_retained'], 0)
+        self.assertEqual(scored['semantic']['facts_retained'], 0)
+        self.assertEqual(len(scored['semantic']['missing_facts']), len(case.facts))
         self.assertEqual(scored['fabricated_identifiers'], ['req_fabricated_999', 'sk_fabricated_zz'])
         self.assertIn('sk_fabricated_zz', fabricated_identifiers(
             scored['summary'], case.facts))
@@ -368,18 +430,26 @@ class LiveQualityRubricTests(unittest.IsolatedAsyncioTestCase):
                             + '长' * (MemoryManager.SUMMARY_MAX_CHARS + 10), 10)
         self.assertFalse(scored['within_summary_limit'])
 
-    def test_report_passes_only_above_the_thresholds(self):
-        good = [score_case(case, f'{case.request_id} {case.key_prefix} {case.conclusion}', 90)
-                for case in CASES]
+    def test_report_gates_on_semantic_and_still_reports_strict(self):
+        good = [score_case(case, self.verbatim(case), 90) for case in CASES]
         report = build_report(good)
         self.assertTrue(report['passed'])
-        self.assertEqual(report['perfect_sessions'], 10)
-        self.assertEqual(report['fact_retention_rate'], 1.0)
+        self.assertEqual(report['strict']['perfect_sessions'], 10)
+        self.assertEqual(report['semantic']['perfect_sessions'], 10)
+        self.assertEqual(report['strict']['fact_retention_rate'], 1.0)
+
+        loosened = [score_case(case, self.verbatim(case) if index % 4 else self.paraphrase(case), 90)
+                    for index, case in enumerate(CASES)]
+        mixed = build_report(loosened)
+        self.assertTrue(mixed['passed'])
+        self.assertEqual(mixed['semantic']['perfect_sessions'], 10)
+        self.assertEqual(mixed['strict']['perfect_sessions'], 7)
+        self.assertEqual(mixed['strict']['by_category']['conclusion'], 7)
+        self.assertEqual(mixed['thresholds']['rubric'], 'semantic')
 
         lost = list(good)
-        lost[0] = score_case(CASES[0], '结论不明，需要更多信息。', 90)
-        lost[2] = score_case(CASES[2], '结论不明。', 90)
-        lost[4] = score_case(CASES[4], '结论不明。', 90)
+        for index in (0, 2, 4):
+            lost[index] = score_case(CASES[index], '结论不明，需要更多信息。', 90)
         self.assertFalse(build_report(lost)['passed'])
 
         invented = list(good)
