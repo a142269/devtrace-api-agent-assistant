@@ -212,7 +212,7 @@ Agent 新增 `search_public_docs` 工具与 `public_api` 计划路径；模型�
 - 质量检查：`developer/evaluate_memory_quality.py` 用确定性摘要器 + 内存 Redis/Chroma 跑压缩管线，校验 3 个关键事实保留、压缩后保留 5 条、情景写入、用户隔离、遗忘清空；报告 [eval_memory_quality_2026-10-18.json](eval_memory_quality_2026-10-18.json)。
 - 测试：`tests/test_memory_management.py` 6 个用例（导出、遗忘、profile 保留、用户隔离、两个端点鉴权/计划清理），测试总数 107；Docker + 真实模型 HTTP 验证一次诊断后消息数 2、删除后清空、计划检查点删除，报告 [eval_memory_management_http_2026-10-18.json](eval_memory_management_http_2026-10-18.json)。
 
-局限：质量检查用确定性摘要器和内存替身，**不评测真实模型摘要/画像质量**；遗忘不删用户级画像；情景记忆仍依赖 ChromaDB 0.5.23。
+局限：质量检查用确定性摘要器和内存替身，**不评测真实模型摘要/画像质量**；遗忘不删用户级画像；情景记忆仍依赖 ChromaDB 0.5.23。（2026-10-21 P5 已补上可配置 TTL、画像删除端点与真实模型摘要评测，见文末"记忆生命周期与真实摘要质量"一节。）
 
 ## MCP 协议接入（2026-10-18）
 
@@ -308,3 +308,22 @@ Agent 新增 `search_public_docs` 工具与 `public_api` 计划路径；模型�
   - 关闭回归（开关置空）：同四条案例的工具名全部回到本地拼写、无任何 `mcp_` 前缀、`status` 仍 `complete`、证据数 4/3/6/5 与开关打开时一致。
   - 验证脚本 `p4_verify_docker.py` 与报告 `.p4_docker_report.json` 在工作区根目录、不入库；脚本对上述断言全部通过（两种开关各一次）。
 - 未验证 / 边界：Docker 栈内的 MCP 调用走 `InProcessTransport`，**外部 server 的真实 stdio 子进程只用自带的 `tests/fake_ext_mcp_server.py` 在单元测试中验证**，没有接入任何真实第三方 MCP server，也没有在容器里拉起外部进程，因此"第三方 server 行为正确"未经验证——注册表提供的是边界（默认拒绝只读白名单、写语义不注册、剥离 server 侧持有参数、重名/连接失败只跳过该 server、外部工具永不进入诊断计划）。没有 HTTP/SSE 传输、没有 OAuth 或任何 server 鉴权、没有多 server 健康检查与自动重连（熔断只在 `MCPToolManager` 层）。MCP 失败不回退本地同名工具，这是设计决定：静默回退会让同一次诊断的证据来源不可追溯。全部为本机演示级验证，不构成生产就绪结论。
+
+## 记忆生命周期与真实摘要质量（2026-10-21，P5）
+
+- 范围：`DEVTRACE_MEMORY_TTL_SECONDS` 让 Redis 侧工作记忆与摘要的过期时间可配置（默认 86400、下限 3600、非法或未设置回落默认，替换原先三处硬编码 86400）；`MemoryManager.forget_profile` + 新端点 `DELETE /developer/profile` 只删调用者本人的画像文档（同时清 `where user_id` 的历史格式文档）并写审计 `memory.profile_delete`；`export_memory` 新增 `exported_at`（ISO 秒）与 `workspace`，且**不**返回内部画像文档 id，原有 `messages/summary/user_profile/counts` 字段保持不变。ChromaDB 侧的情景记忆与画像**没有 TTL**，只能靠显式 API 删除——这是本阶段确定的生命周期边界，已写入模块说明与 `.env.example`。
+- 单元测试：201 → **224 项通过 + 103 subtest**（新增 `tests/test_memory_lifecycle.py` 23 项；本机 `.dsh-venv` Python 3.10）。覆盖：TTL 解析（未设置/空值→86400、`7200`→7200、`60`→3600 取下限、`not-a-number`/`3600.5`/`86400s`/空白→回落默认）、构造函数显式值优先于环境变量、fake Redis 记录到的 `expire`/`setex` TTL 恰为配置值且工作记忆 key 与摘要 key 都被覆盖；画像删除（当前文档 + legacy 文档一起删、删后 `_get_profile` 为空、会话消息与情景记录保留、A 删除不影响 B、无画像时 `profile_deleted=false`）；导出新增字段（`exported_at` 可被 `fromisoformat` 解析、`workspace` 显式值与 `default` 回退、旧字段齐全、内部文档 id 不出现在序列化结果里）；`DELETE /developer/profile` 端点（匿名 401、登录 200 且 `workspace` 取自服务端配置、审计事件落 stream、响应与审计都不含画像内容/消息正文/口令/文档 id、删除后另一用户画像仍可读且本人会话消息未少）；live 评分口径（满保留、编造标识符、超长摘要、8/10 阈值聚合、无密钥 `skipped=true` 且 `passed=true`）、以及合成对话确实 ≥20 轮且埋 3 个事实。**旧 201 项无一改动、无一失败。**
+- Ruff：CI `--select F` 清单新增 `tests/test_memory_lifecycle.py`、`developer/evaluate_memory_quality_live.py`、`memory/conversation_memory.py`（共 49 个文件），本地按 CI 同参数整表运行 `All checks passed!`。P4 披露的 `mcp/tool_manager.py` 历史 F402 仍未处理、仍不在清单内。
+- 确定性压缩评测（CI）：`developer/evaluate_memory_quality.py` 本机重跑 `passed=true`，事实保留 3/3、压缩后工作记忆 5 条、情景写入 1 条、导出含摘要、用户隔离与遗忘清空均通过。
+- 真实模型摘要评测（**不进 CI**，会花真实调用）：`developer/evaluate_memory_quality_live.py` 生成 10 场 × 22 轮合成对话，每场埋"请求编号 + 密钥前缀 + 结论"三个事实，全部走生产 `MemoryManager._compress` 提示词路径（每场恰好触发一次压缩，共 10 次真实摘要调用），Redis/Chroma 用内存替身。结果（provider 为本机 `.env` 里已配置的 Anthropic 兼容端点，模型 `deepseek-chat`，报告不读取也不打印任何密钥）：
+  - 逐字保留：**请求编号 10/10、密钥前缀 10/10、结论 6/10**；`perfect_sessions=6`、`fact_retention_rate=0.6`。
+  - 4 场失分全部是结论被**语义等价的改写**（如埋入"凭证已过期，需要轮换"，摘要写成"最终结论是凭证已过期需轮换"——逗号被吞掉导致逐字匹配失败），不是事实丢失；`fabricated_identifiers=0`（没有任何编造的请求号/密钥串）、`overlong_summaries=0`（最长 139 字，远低于 800 上限）；摘要延迟 mean 1026.8ms / max 1182ms。
+  - 阈值 `perfect_sessions>=8 且 fabricated=0 且 overlong=0` **未达成**，脚本按设计打印结果后以退出码 1 结束。原始报告 [eval_memory_quality_live_2026-10-21.json](eval_memory_quality_live_2026-10-21.json)（卡片建议文件名日期为 2026-10-19，实际运行日是 2026-10-21，按真实日期命名并在此披露）。
+  - 无密钥分支本机验证：清掉环境变量后输出 `{"skipped": true, "cases": 0, "passed": true}`、退出码 0。
+  - 成本披露：第一次运行时 Windows 把容器内 `/tmp` 输出路径转换成了宿主机路径，10 次摘要调用已经完成但报告无法写出，随后关闭路径转换重跑一次，因此本阶段共消耗 **20 次**真实摘要调用。
+- Docker + HTTP 验证（`devtrace-verify` 栈，API 18002，`--scale worker=2`，镜像 `--build` 重建后运行，`decision_mode: model`；结束后 `down` 且**未使用 `-v`**）：
+  - TTL 真实生效：`docker compose exec -e DEVTRACE_MEMORY_TTL_SECONDS=…` 注入三种取值，**没有改动本机 `backend/.env`**（因此无需回滚）。默认 86400 → 工作记忆 key `TTL=86400`、摘要 key `TTL=86399`；`7200` → 7200/7199；非法下限测试 `60` → 配置被钳到 **3600**，Redis 实际 TTL 3600/3599。三种取值 `ttl_applied` 均为 true（探针 `p5_ttl_probe.py` 只打印数字与 key 名，Redis 连接串留在容器内）。
+  - 记忆导出：登录后先跑一次真实诊断（`req_auth_01`，会话 `p5-lifecycle`），`GET /developer/memory/p5-lifecycle` **200**，响应含 `exported_at=2026-10-21T14:19:08`、`workspace=default`、`counts={messages:2, summary_chars:0, has_profile:true}`，消息带 `ts`。
+  - 画像删除：先用生产文档 id 生成器（`_profile_doc_id`）往真实 Chroma 写入一条合成画像，`DELETE /developer/profile` **200**，返回 `profile_deleted=true`、`deleted_documents=1`、`conversation_memory_kept=true`、`episodic_kept=true`、`workspace=default`；再次导出 `has_profile=false` 而**消息仍为 2 条**（证明只删画像）。
+  - 鉴权与脱敏：无 token 时 `DELETE /developer/profile` **401**、`GET /developer/memory/{id}` **401**；画像删除响应与两次导出响应中均不含口令、不含内部文档 id `user_profile:`、不含消息正文标记；容器内直接读 Redis 审计流（探针，口令经容器内文件读取、不经命令行）：扫描 274 条事件，`memory.profile_delete` 恰 1 条（actor=demo、resource=profile、status=success、workspace=default、`detail` 仅 `kind`/`success` 两个白名单键），整条流里检索不到消息正文标记、画像偏好标记、口令与 `user_profile:` 文档 id。验证脚本与报告（`p5_verify_http.py`、`p5_ttl_probe.py`、`p5_seed_profile.py`、`p5_audit_probe.py`、`.p5_http_report.json`、`.p5_audit_report.json`）放在工作区根目录，不入库。
+- 未验证 / 边界：**跨用户画像隔离只在单元测试用替身验证，Docker 侧只有 demo 一个账号，没有再造第二个真实用户复测**；真实模型质量结论只覆盖"10 场单人模板合成对话 + 单一 provider"，评分是逐字匹配，对中文标点/省略写法偏严，也不评测画像准确性与情景检索召回；ChromaDB 情景记忆与画像无 TTL、无定时清理、无批量导出与按 workspace 分区，画像只能整份删除没有编辑界面，记忆未加密；Redis 里与记忆无关的 86400 硬编码（计划检查点、运行记录、会话锁）不在本阶段范围，未改动；JWT/队列/MCP 语义未触碰。全部为本机演示级验证，不构成生产就绪结论。
