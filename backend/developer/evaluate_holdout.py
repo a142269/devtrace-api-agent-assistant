@@ -65,6 +65,16 @@ def load_cases():
     return cases
 
 
+def filter_batch(cases, batch):
+    """Select one label batch; an unknown batch is an error, not an empty run."""
+    if not batch:
+        return cases
+    selected = [case for case in cases if case.get("batch", ORIGINAL_BATCH) == batch]
+    if not selected:
+        raise ValueError(f"no holdout cases in batch {batch!r}")
+    return selected
+
+
 def assess(case_id, group, response, expect):
     reasons = []
     plan = response.get("plan") or {}
@@ -226,9 +236,16 @@ def main():
     parser.add_argument("--base-url", default="http://localhost:8000")
     parser.add_argument("--token-env", default="DEVTRACE_EVAL_TOKEN")
     parser.add_argument("--output", type=Path, required=True)
+    parser.add_argument("--batch", default="",
+                        help="only run one label batch (2026-10-18 or 2026-10-21); empty runs all")
     args = parser.parse_args()
 
     cases = load_cases()
+    if args.batch:
+        try:
+            cases = filter_batch(cases, args.batch)
+        except ValueError as error:
+            parser.error(str(error))
     if args.mode == "rules":
         rows = asyncio.run(rules_run(cases))
     else:
@@ -241,6 +258,7 @@ def main():
     report = {
         "mode": args.mode,
         "base_url": args.base_url if args.mode == "model" else None,
+        "batch_filter": args.batch or None,
         "holdout_version": "2026-10-18 (19 cases) + 2026-10-21 expansion (21 cases)",
         "labels": "hand-written against dedicated fixtures; not used to tune the agent",
         "summary": summary,

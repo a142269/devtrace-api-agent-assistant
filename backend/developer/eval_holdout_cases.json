@@ -326,6 +326,7 @@
     "id": "h_quota_v2_doc_version_boundary",
     "group": "auth",
     "batch": "2026-10-21",
+    "label_scope": "标签绑定规则模式的文档桩：只有以 v2 开头的查询才返回 v2 文档，因此断言 v1 文档标题。模型模式走真实检索，可能取到 v2 文档；2026-10-21 模型模式该条失败即源于此，不代表版本门控缺陷。",
     "message": "req_quota_v2_01 返回 429，v2 怎么处理",
     "expect": {
       "plan_status": "complete",
@@ -521,6 +522,7 @@
     "id": "h_public_playbook_path",
     "group": "public_api",
     "batch": "2026-10-21",
+    "label_scope": "标签写死了本地工具拼写。启用 DEVTRACE_MCP_PUBLIC_TOOLS 时同一工具以 mcp_ 前缀出现在 actions 里，模型模式 2026-10-21 因此判失败；工具本身已执行，属标签与传输拼写绑定，不是能力缺口。",
     "message": "公开文档里 Stripe 返回 429 too many requests 应该怎么处理",
     "expect": {
       "plan_status": "complete",
@@ -534,6 +536,7 @@
     "id": "h_public_docs_path",
     "group": "public_api",
     "batch": "2026-10-21",
+    "label_scope": "同 h_public_playbook_path：标签绑定本地工具拼写，MCP 路由下以 mcp_ 前缀执行，模型模式 2026-10-21 判失败但工具已执行。",
     "message": "GitHub 的公开文档里分页参数怎么写",
     "expect": {
       "plan_status": "complete",

@@ -11,7 +11,7 @@ if str(BACKEND) not in sys.path:
 from developer import data  # noqa: E402
 from developer.assistant import IDENTIFIER_RE  # noqa: E402
 from developer.evaluate_holdout import (  # noqa: E402
-    EXPECT_KEYS, HYPOTHESIS_CODES, ORIGINAL_BATCH, load_cases,
+    EXPECT_KEYS, HYPOTHESIS_CODES, ORIGINAL_BATCH, filter_batch, load_cases,
 )
 
 # Identifiers the set references on purpose so the agent must report "no record".
@@ -46,6 +46,16 @@ class HoldoutSetTests(unittest.TestCase):
             counts[case.get("batch", ORIGINAL_BATCH)] = counts.get(
                 case.get("batch", ORIGINAL_BATCH), 0) + 1
         self.assertEqual(counts, {ORIGINAL_BATCH: 19, "2026-10-21": 21})
+
+    def test_batch_filter_selects_the_expansion(self):
+        self.assertEqual(len(filter_batch(self.cases, "")), 40)
+        self.assertEqual(len(filter_batch(self.cases, ORIGINAL_BATCH)), 19)
+        new = filter_batch(self.cases, "2026-10-21")
+        self.assertEqual(len(new), 21)
+        self.assertTrue(all(case["batch"] == "2026-10-21" for case in new))
+        # A typo must not silently become an empty, and therefore trivially green, run.
+        with self.assertRaises(ValueError):
+            filter_batch(self.cases, "2026-10-99")
 
     def test_every_group_is_covered(self):
         self.assertTrue(REQUIRED_GROUPS.issubset({case["group"] for case in self.cases}))
