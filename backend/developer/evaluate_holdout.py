@@ -19,6 +19,9 @@ from pathlib import Path
 import httpx
 
 CASES_PATH = Path(__file__).parent / "eval_holdout_cases.json"
+# Cases written in 2026-10-18 carry no batch field; the 2026-10-21 expansion marks
+# itself so both batches stay countable in one report.
+ORIGINAL_BATCH = "2026-10-18"
 HYPOTHESIS_CODES = {
     "expired_key", "missing_scope", "malformed_header", "missing_api_key_header",
     "minute_quota_exceeded", "webhook_delivery_failed",
@@ -143,6 +146,7 @@ async def run_case(case, send):
     merged = dict(rows[-1])
     merged["passed"] = all(row["passed"] for row in rows)
     merged["reasons"] = [reason for row in rows for reason in row["reasons"]]
+    merged["batch"] = case.get("batch", ORIGINAL_BATCH)
     return merged
 
 
@@ -152,6 +156,7 @@ async def rules_run(cases):
     from developer.assistant import DeveloperAssistant, RuleDecisionModel
     from developer.data import DOCS
     from developer.evaluate_planning import Memory, Redis, SandboxClient
+    from developer.public_knowledge import PublicDocsKnowledge
     from mcp.tool_manager import MCPToolManager
 
     class HoldoutKnowledge:
@@ -169,6 +174,9 @@ async def rules_run(cases):
                 memory=Memory(), knowledge=HoldoutKnowledge(), redis_client=Redis(),
                 model=RuleDecisionModel(), tool_manager=MCPToolManager(api_key="evaluation-only"),
                 sandbox_url="http://sandbox",
+                # The public_api path needs the offline attributed corpus; without it
+                # search_public_docs raises and every public case stalls in waiting.
+                public_knowledge=PublicDocsKnowledge(),
             )
 
             async def send(message, conversation, assistant=assistant, case=case):
@@ -208,6 +216,7 @@ def summarize(rows):
     return {
         "count": len(rows), "passed": sum(int(row["passed"]) for row in rows),
         "by_group": bucket("group"), "by_decision_mode": bucket("decision_mode"),
+        "by_batch": bucket("batch"),
     }
 
 
@@ -232,7 +241,7 @@ def main():
     report = {
         "mode": args.mode,
         "base_url": args.base_url if args.mode == "model" else None,
-        "holdout_version": "2026-10-18",
+        "holdout_version": "2026-10-18 (19 cases) + 2026-10-21 expansion (21 cases)",
         "labels": "hand-written against dedicated fixtures; not used to tune the agent",
         "summary": summary,
         "cases": rows,
