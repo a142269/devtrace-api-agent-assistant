@@ -1,0 +1,310 @@
+{
+  "skipped": false,
+  "cases": 10,
+  "strict": {
+    "perfect_sessions": 6,
+    "fact_retention_rate": 0.6,
+    "by_category": {
+      "identifier": 10,
+      "key_permissions": 10,
+      "conclusion": 6
+    }
+  },
+  "semantic": {
+    "perfect_sessions": 10,
+    "fact_retention_rate": 1.0,
+    "by_category": {
+      "identifier": 10,
+      "key_permissions": 10,
+      "conclusion": 10
+    }
+  },
+  "fabricated_identifiers": 0,
+  "overlong_summaries": 0,
+  "latency_ms": {
+    "mean": 984.9,
+    "max": 1334
+  },
+  "thresholds": {
+    "rubric": "semantic",
+    "semantic_perfect_sessions_at_least": 8,
+    "fabricated_identifiers": 0,
+    "summary_max_chars": 800,
+    "note": "strict is reported for continuity with the 2026-10-21 run; it never gates."
+  },
+  "passed": true,
+  "results": [
+    {
+      "case": "auth-expired",
+      "strict": {
+        "identifier": true,
+        "key_permissions": true,
+        "conclusion": false,
+        "facts_retained": 2,
+        "facts_total": 3,
+        "missing_facts": [
+          "凭证已过期，需要轮换"
+        ],
+        "perfect": false
+      },
+      "semantic": {
+        "identifier": true,
+        "key_permissions": true,
+        "conclusion": true,
+        "facts_retained": 3,
+        "facts_total": 3,
+        "missing_facts": [],
+        "perfect": true
+      },
+      "fabricated_identifiers": [],
+      "summary_chars": 109,
+      "within_summary_limit": true,
+      "latency_ms": 1036,
+      "summary": "用户排查 req_live_101 问题，密钥前缀为 sk_live_a1、需要 logs:read 权限，最终结论是凭证已过期需轮换，网络或客户端重试的可能性缺乏记录支持。下一步应先处理凭证轮换，再回头排查重试问题。"
+    },
+    {
+      "case": "auth-scope",
+      "strict": {
+        "identifier": true,
+        "key_permissions": true,
+        "conclusion": true,
+        "facts_retained": 3,
+        "facts_total": 3,
+        "missing_facts": [],
+        "perfect": true
+      },
+      "semantic": {
+        "identifier": true,
+        "key_permissions": true,
+        "conclusion": true,
+        "facts_retained": 3,
+        "facts_total": 3,
+        "missing_facts": [],
+        "perfect": true
+      },
+      "fabricated_identifiers": [],
+      "summary_chars": 110,
+      "within_summary_limit": true,
+      "latency_ms": 886,
+      "summary": "用户报告 req_live_202 出问题，排查后确认密钥前缀为 sk_live_b2，结论是缺少 charges:write 权限。虽然也可能存在网络或客户端重试问题，但记录不支持该方向，建议先处理权限问题再排查重试。"
+    },
+    {
+      "case": "quota-429",
+      "strict": {
+        "identifier": true,
+        "key_permissions": true,
+        "conclusion": false,
+        "facts_retained": 2,
+        "facts_total": 3,
+        "missing_facts": [
+          "分钟配额耗尽，按 Retry-After 退避"
+        ],
+        "perfect": false
+      },
+      "semantic": {
+        "identifier": true,
+        "key_permissions": true,
+        "conclusion": true,
+        "facts_retained": 3,
+        "facts_total": 3,
+        "missing_facts": [],
+        "perfect": true
+      },
+      "fabricated_identifiers": [],
+      "summary_chars": 122,
+      "within_summary_limit": true,
+      "latency_ms": 680,
+      "summary": "用户排查 req_live_303 问题，密钥前缀为 sk_live_c3、需 reads:read 权限；结论是分钟配额耗尽，应按 Retry-After 退避，网络或客户端重试的解释缺乏记录支持。下一步先处理配额耗尽问题，再回头看重试情况。"
+    },
+    {
+      "case": "webhook-503",
+      "strict": {
+        "identifier": true,
+        "key_permissions": true,
+        "conclusion": true,
+        "facts_retained": 3,
+        "facts_total": 3,
+        "missing_facts": [],
+        "perfect": true
+      },
+      "semantic": {
+        "identifier": true,
+        "key_permissions": true,
+        "conclusion": true,
+        "facts_retained": 3,
+        "facts_total": 3,
+        "missing_facts": [],
+        "perfect": true
+      },
+      "fabricated_identifiers": [],
+      "summary_chars": 130,
+      "within_summary_limit": true,
+      "latency_ms": 778,
+      "summary": "用户报告 delivery_live_404 问题，排查中确认密钥前缀为 sk_live_d4、所需权限为 webhooks:read，最终结论是接收端 503 暂不可用。虽然也可能涉及网络或客户端重试，但记录不支持该方向，建议先处理 503 问题再排查重试。"
+    },
+    {
+      "case": "webhook-signature",
+      "strict": {
+        "identifier": true,
+        "key_permissions": true,
+        "conclusion": true,
+        "facts_retained": 3,
+        "facts_total": 3,
+        "missing_facts": [],
+        "perfect": true
+      },
+      "semantic": {
+        "identifier": true,
+        "key_permissions": true,
+        "conclusion": true,
+        "facts_retained": 3,
+        "facts_total": 3,
+        "missing_facts": [],
+        "perfect": true
+      },
+      "fabricated_identifiers": [],
+      "summary_chars": 139,
+      "within_summary_limit": true,
+      "latency_ms": 1163,
+      "summary": "用户报告 delivery_live_505 故障，排查中确认密钥前缀为 sk_live_e5、所需权限为 webhooks:read，最终结论是签名密钥不匹配。虽然理论上也可能是网络或客户端重试导致，但记录不支持这一方向。下一步应先处理签名密钥不匹配问题，再回头排查重试因素。"
+    },
+    {
+      "case": "rate-retry",
+      "strict": {
+        "identifier": true,
+        "key_permissions": true,
+        "conclusion": false,
+        "facts_retained": 2,
+        "facts_total": 3,
+        "missing_facts": [
+          "重试风暴触发限流，需要指数退避"
+        ],
+        "perfect": false
+      },
+      "semantic": {
+        "identifier": true,
+        "key_permissions": true,
+        "conclusion": true,
+        "facts_retained": 3,
+        "facts_total": 3,
+        "missing_facts": [],
+        "perfect": true
+      },
+      "fabricated_identifiers": [],
+      "summary_chars": 115,
+      "within_summary_limit": true,
+      "latency_ms": 1334,
+      "summary": "用户排查 req_live_606 问题，密钥前缀为 sk_live_f6、需 api:read 权限，结论是重试风暴触发限流，需采用指数退避。其他解释（如网络或客户端重试）缺乏记录支持。下一步应先按该结论处理，再回头看重试问题。"
+    },
+    {
+      "case": "key-rotated",
+      "strict": {
+        "identifier": true,
+        "key_permissions": true,
+        "conclusion": false,
+        "facts_retained": 2,
+        "facts_total": 3,
+        "missing_facts": [
+          "旧密钥已轮换，缓存里还是旧值"
+        ],
+        "perfect": false
+      },
+      "semantic": {
+        "identifier": true,
+        "key_permissions": true,
+        "conclusion": true,
+        "facts_retained": 3,
+        "facts_total": 3,
+        "missing_facts": [],
+        "perfect": true
+      },
+      "fabricated_identifiers": [],
+      "summary_chars": 116,
+      "within_summary_limit": true,
+      "latency_ms": 1017,
+      "summary": "用户排查 req_live_707 问题，确认密钥前缀为 sk_live_g7、需要 balances:read 权限。结论是旧密钥已轮换但缓存仍为旧值，网络或客户端重试的可能性缺乏记录支持。下一步应先处理缓存旧值问题，再排查重试。"
+    },
+    {
+      "case": "region-timeout",
+      "strict": {
+        "identifier": true,
+        "key_permissions": true,
+        "conclusion": true,
+        "facts_retained": 3,
+        "facts_total": 3,
+        "missing_facts": [],
+        "perfect": true
+      },
+      "semantic": {
+        "identifier": true,
+        "key_permissions": true,
+        "conclusion": true,
+        "facts_retained": 3,
+        "facts_total": 3,
+        "missing_facts": [],
+        "perfect": true
+      },
+      "fabricated_identifiers": [],
+      "summary_chars": 122,
+      "within_summary_limit": true,
+      "latency_ms": 753,
+      "summary": "用户排查 req_live_808 问题，密钥前缀为 sk_live_h8、需 tokens:read 权限，但最终结论是区域网关超时，与权限无关。助手认为网络或客户端重试也有可能，但记录不支持。下一步建议先处理网关超时结论，再回头看重试问题。"
+    },
+    {
+      "case": "duplicate-billing",
+      "strict": {
+        "identifier": true,
+        "key_permissions": true,
+        "conclusion": true,
+        "facts_retained": 3,
+        "facts_total": 3,
+        "missing_facts": [],
+        "perfect": true
+      },
+      "semantic": {
+        "identifier": true,
+        "key_permissions": true,
+        "conclusion": true,
+        "facts_retained": 3,
+        "facts_total": 3,
+        "missing_facts": [],
+        "perfect": true
+      },
+      "fabricated_identifiers": [],
+      "summary_chars": 119,
+      "within_summary_limit": true,
+      "latency_ms": 1055,
+      "summary": "用户排查 req_live_909 问题，密钥前缀为 sk_live_i9、需要 charges:read 权限；当前结论是幂等键缺失导致重复扣款，网络或客户端重试虽有可能但记录不支持。下一步建议先处理幂等键缺失问题，再回头排查重试因素。"
+    },
+    {
+      "case": "token-revoked",
+      "strict": {
+        "identifier": true,
+        "key_permissions": true,
+        "conclusion": true,
+        "facts_retained": 3,
+        "facts_total": 3,
+        "missing_facts": [],
+        "perfect": true
+      },
+      "semantic": {
+        "identifier": true,
+        "key_permissions": true,
+        "conclusion": true,
+        "facts_retained": 3,
+        "facts_total": 3,
+        "missing_facts": [],
+        "perfect": true
+      },
+      "fabricated_identifiers": [],
+      "summary_chars": 139,
+      "within_summary_limit": true,
+      "latency_ms": 1147,
+      "summary": "用户报告 delivery_live_110 故障，排查后确认密钥前缀为 sk_live_j10、需要 events:read 权限，最终结论是回调令牌被撤销。虽然理论上也可能是网络或客户端重试导致，但记录不支持这一方向。下一步应先处理回调令牌被撤销的问题，再回头排查重试因素。"
+    }
+  ],
+  "limitations": "Template-generated synthetic conversations by one author, in-memory Redis/Chroma doubles, a single provider; it measures whether planted facts survive the compression prompt, not retrieval accuracy or production memory quality. The semantic column accepts curated synonym groups for the conclusion only - identifiers must stay verbatim - and still fails a negated restatement.",
+  "model": "deepseek-chat",
+  "transport": "anthropic-compatible",
+  "base_url_configured": true
+}

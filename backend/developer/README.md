@@ -88,7 +88,7 @@ MCP 协议：`mcp/server.py` 提供 JSON-RPC 2.0 的 `initialize/tools/list/tool
 
 候选计划评分：`python -m developer.evaluate_planning_candidates` 检查 approved/evidence_first/minimal 三候选打分与选择（2026-10-18 为 11/11）；`DEVTRACE_PLANNING_CANDIDATES=enabled` 时启用，响应 `plan.candidates` 暴露候选与分数。
 
-`evaluate_holdout` 使用 19 条手写标签的独立 holdout 集（`eval_holdout_cases.json` 与专用夹具），规则模式在进程内运行；模型模式需额外传 `--mode model --base-url <地址>` 并设置 `DEVTRACE_EVAL_TOKEN`。2026-10-18 规则与模型均为 19/19，但样本小、标签由作者手写，不等同于第三方隐藏评测。`evaluate_memory_tasks` 用 12 条两轮任务比较同会话恢复与新会话重开（规则模式、stub 工作记忆），衡量跨轮任务成功与重复检索，不代表 ChromaDB 情景记忆或生产延迟。
+`evaluate_holdout` 使用 40 条手写标签的独立 holdout 集（`eval_holdout_cases.json` 与专用夹具；`2026-10-18` 批 19 条 + `2026-10-21` 批 21 条），规则模式在进程内运行；模型模式需额外传 `--mode model --base-url <地址>` 并设置 `DEVTRACE_EVAL_TOKEN`，`--batch <批次>` 只跑一个标签批次（未知批次直接报错，不会空跑）。结果按 `batch` 标注并在 `summary.by_batch` 分组。2026-10-21 规则模式整表 40/40（19/19 + 21/21）；为控成本真实模型只跑了新批 21 条，得 **18/21**（2 条因标签按本地工具拼写断言而验证栈开着 `DEVTRACE_MCP_ALL_TOOLS`，1 条未带回指定版本文档证据），3 条失败原样保留在报告里、断言未因结果而修改。样本小、标签由项目作者手写，不等同于第三方隐藏评测。`evaluate_memory_tasks` 用 12 条两轮任务比较同会话恢复与新会话重开（规则模式、stub 工作记忆），衡量跨轮任务成功与重复检索，不代表 ChromaDB 情景记忆或生产延迟。
 
 检索评测需要可用的 ChromaDB 或本地向量模型。规则规划和故障注入使用进程内模拟平台，不能视作模型的泛化评估。
 

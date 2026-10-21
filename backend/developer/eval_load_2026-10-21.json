@@ -1,0 +1,292 @@
+{
+  "environment": {
+    "stack": "devtrace-verify",
+    "base_url": "http://127.0.0.1:18002",
+    "api_port": 18002,
+    "workers": 2,
+    "decision_mode": "rules (DEVELOPER_MODEL_MODE=rules) - 零付费模型调用",
+    "task_queue": "enabled",
+    "mcp_public_tools": "enabled",
+    "started_at": "2026-10-21T23:35:52+0800",
+    "wall_seconds": 8.2,
+    "code_under_test": "ad99f5e"
+  },
+  "phase_a_10_concurrent_stream": {
+    "requests": 10,
+    "http_status": {
+      "200": 10
+    },
+    "terminal_events": {
+      "complete": 10
+    },
+    "timeline_events_total": 134,
+    "latency_ms": {
+      "n": 10,
+      "min": 415,
+      "p50": 1049,
+      "p95": 1859,
+      "max": 1859,
+      "mean": 1105.3
+    },
+    "time_to_first_event_ms": {
+      "p50": 29,
+      "p95": 31
+    },
+    "run_ids_unique": 10,
+    "task_ids_unique": 10,
+    "detail": [
+      {
+        "index": 0,
+        "http_status": 200,
+        "terminal": "complete",
+        "total_ms": 415,
+        "ttfe_ms": 10,
+        "answer_chars": 143,
+        "events": {
+          "started": 1,
+          "timeline": 15,
+          "complete": 1,
+          "error": 0
+        }
+      },
+      {
+        "index": 1,
+        "http_status": 200,
+        "terminal": "complete",
+        "total_ms": 427,
+        "ttfe_ms": 21,
+        "answer_chars": 157,
+        "events": {
+          "started": 1,
+          "timeline": 15,
+          "complete": 1,
+          "error": 0
+        }
+      },
+      {
+        "index": 2,
+        "http_status": 200,
+        "terminal": "complete",
+        "total_ms": 834,
+        "ttfe_ms": 24,
+        "answer_chars": 117,
+        "events": {
+          "started": 1,
+          "timeline": 11,
+          "complete": 1,
+          "error": 0
+        }
+      },
+      {
+        "index": 3,
+        "http_status": 200,
+        "terminal": "complete",
+        "total_ms": 1050,
+        "ttfe_ms": 29,
+        "answer_chars": 119,
+        "events": {
+          "started": 1,
+          "timeline": 11,
+          "complete": 1,
+          "error": 0
+        }
+      },
+      {
+        "index": 4,
+        "http_status": 200,
+        "terminal": "complete",
+        "total_ms": 848,
+        "ttfe_ms": 29,
+        "answer_chars": 96,
+        "events": {
+          "started": 1,
+          "timeline": 11,
+          "complete": 1,
+          "error": 0
+        }
+      },
+      {
+        "index": 5,
+        "http_status": 200,
+        "terminal": "complete",
+        "total_ms": 1049,
+        "ttfe_ms": 28,
+        "answer_chars": 108,
+        "events": {
+          "started": 1,
+          "timeline": 11,
+          "complete": 1,
+          "error": 0
+        }
+      },
+      {
+        "index": 6,
+        "http_status": 200,
+        "terminal": "complete",
+        "total_ms": 1455,
+        "ttfe_ms": 30,
+        "answer_chars": 114,
+        "events": {
+          "started": 1,
+          "timeline": 11,
+          "complete": 1,
+          "error": 0
+        }
+      },
+      {
+        "index": 7,
+        "http_status": 200,
+        "terminal": "complete",
+        "total_ms": 1661,
+        "ttfe_ms": 31,
+        "answer_chars": 183,
+        "events": {
+          "started": 1,
+          "timeline": 21,
+          "complete": 1,
+          "error": 0
+        }
+      },
+      {
+        "index": 8,
+        "http_status": 200,
+        "terminal": "complete",
+        "total_ms": 1455,
+        "ttfe_ms": 30,
+        "answer_chars": 103,
+        "events": {
+          "started": 1,
+          "timeline": 12,
+          "complete": 1,
+          "error": 0
+        }
+      },
+      {
+        "index": 9,
+        "http_status": 200,
+        "terminal": "complete",
+        "total_ms": 1859,
+        "ttfe_ms": 30,
+        "answer_chars": 209,
+        "events": {
+          "started": 1,
+          "timeline": 16,
+          "complete": 1,
+          "error": 0
+        }
+      }
+    ]
+  },
+  "phase_b_same_conversation": {
+    "requests": 3,
+    "http_status": {
+      "409": 2,
+      "200": 1
+    },
+    "terminal_events": {
+      "http_409": 2,
+      "complete": 1
+    },
+    "completed_runs": 1,
+    "rejected_as_inflight": 2,
+    "conclusion": "会话锁把同一会话的并发请求挡在执行之外；未观察到同一会话被重复执行",
+    "detail": [
+      {
+        "http_status": 409,
+        "terminal": "http_409",
+        "total_ms": 56,
+        "run_id": null,
+        "detail": "{\"detail\":\"该请求或会话正在处理中，请稍后重试\"}"
+      },
+      {
+        "http_status": 200,
+        "terminal": "complete",
+        "total_ms": 457,
+        "run_id": "dbdbab45-d818-4abf-a880-ca83da58bb19",
+        "detail": null
+      },
+      {
+        "http_status": 409,
+        "terminal": "http_409",
+        "total_ms": 55,
+        "run_id": null,
+        "detail": "{\"detail\":\"该请求或会话正在处理中，请稍后重试\"}"
+      }
+    ]
+  },
+  "phase_c_idempotency_replay": {
+    "concurrent": 3,
+    "http_status": {
+      "409": 2,
+      "200": 1
+    },
+    "run_ids": [
+      "e31c334e-35c6-4729-bdc4-e7547c93dd2b"
+    ],
+    "replay_after_completion": {
+      "http_status": 200,
+      "run_id": "e31c334e-35c6-4729-bdc4-e7547c93dd2b",
+      "plan_status": "complete"
+    },
+    "replay_reuses_first_run": true,
+    "conclusion": "相同 Idempotency-Key 的成功结果被缓存复用；竞争窗口内的其余请求返回 409，未观察到同一幂等键对应多次真实执行"
+  },
+  "phase_d_sync_limiter": {
+    "requests": 36,
+    "http_status": {
+      "200": 26,
+      "429": 10
+    },
+    "limited_429": 10,
+    "window": "30 次 / 60 秒 / 用户（developer_chat 内的 limit()）",
+    "conclusion": "同步 /developer/chat 在超过 30 次/60 秒后返回 429，限流按预期生效"
+  },
+  "phase_e_stream_limiter": {
+    "requests": 24,
+    "http_status": {
+      "200": 24
+    },
+    "terminal_events": {
+      "complete": 24
+    },
+    "limited_429": 0,
+    "latency_ms": {
+      "p50": 1988,
+      "p95": 3063,
+      "max": 3257
+    },
+    "conclusion": "队列化的 /developer/chat/stream 入口未调用 limit()，因此并发流式请求不会触发 30 次/60 秒的用户级限流（已记录为差异，本阶段未修改）"
+  },
+  "queue_metrics_after_run": {
+    "http_status": 403,
+    "body": null
+  },
+  "task_records": {
+    "checked": 10,
+    "statuses": {
+      "completed": 10
+    },
+    "attempts_values": [
+      0
+    ],
+    "run_ids_match_stream": 10,
+    "duplicate_run_ids_in_history": 0,
+    "runs_index_size": 50,
+    "runs_index_note": "GET /developer/runs 只返回最近 50 条，因此索引不用于证明每个 run 都存在",
+    "direct_run_fetches": {
+      "requested": 10,
+      "http_status": {
+        "200": 10
+      },
+      "run_id_matches": 10
+    },
+    "runs_history_http_status": 200
+  },
+  "duplicates_and_errors": {
+    "completed_requests": 35,
+    "total_requests": 77,
+    "distinct_run_ids": 36,
+    "failed_or_exception_rows": []
+  },
+  "limitations": "单机 Docker（2 worker、1 个 Redis 实例、1 个 Chroma 容器）、rules 决策模式、同一演示用户、n=10 的时延样本；不是容量压测，不能据此推断生产吞吐或 p99。限流窗口按用户计数，与真实多租户流量不同。"
+}
