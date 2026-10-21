@@ -437,9 +437,9 @@ class MCPToolManager:
         required = schema.get("required", [])
         properties = schema.get("properties", {})
 
-        for field in required:
-            if field not in params:
-                raise ValueError(f"工具 {tool.name} 缺少必需参数: {field}")
+        for field_name in required:
+            if field_name not in params:
+                raise ValueError(f"工具 {tool.name} 缺少必需参数: {field_name}")
 
         for key, value in params.items():
             if key in properties:
