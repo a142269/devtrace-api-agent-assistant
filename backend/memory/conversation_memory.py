@@ -9,12 +9,16 @@
 关键设计：
   - 上下文构建时三级记忆融合，按重要性 + 时效性排序
   - 工作记忆超过阈值时自动压缩（LLM 摘要），防止 context 爆炸
+  - 生命周期：Redis 工作记忆/摘要按 DEVTRACE_MEMORY_TTL_SECONDS 过期（默认 24h），
+    ChromaDB 情景记忆与用户画像不过期，删除只能显式调用 forget_conversation /
+    forget_profile
   - 所有 Embedding 通过 Anthropic API 生成，无本地模型
 """
 import hashlib
 import asyncio
 import json
 import logging
+import os
 import time
 from dataclasses import dataclass, field
 from datetime import datetime
@@ -28,6 +32,23 @@ from anthropic import AsyncAnthropic
 from core.llm_utils import extract_text_content
 
 logger = logging.getLogger(__name__)
+
+# Redis holds working memory and summaries; both expire. ChromaDB holds episodic
+# memory and profiles and has no TTL, so those only leave through an explicit API.
+DEFAULT_MEMORY_TTL_SECONDS = 86400
+MIN_MEMORY_TTL_SECONDS = 3600
+MEMORY_TTL_ENV = "DEVTRACE_MEMORY_TTL_SECONDS"
+
+
+def parse_memory_ttl_seconds(raw: Optional[str] = None) -> int:
+    """Read DEVTRACE_MEMORY_TTL_SECONDS: unset or non-numeric falls back to 24h."""
+    if raw is None:
+        raw = os.getenv(MEMORY_TTL_ENV, "")
+    try:
+        value = int(str(raw).strip())
+    except (TypeError, ValueError):
+        return DEFAULT_MEMORY_TTL_SECONDS
+    return max(MIN_MEMORY_TTL_SECONDS, value)
 
 
 class MsgRole(Enum):
@@ -77,7 +98,8 @@ class MemoryManager:
     """
     三级记忆管理器。
 
-    工作记忆存 Redis（TTL 24h），情景记忆和用户画像存 ChromaDB（持久化）。
+    工作记忆存 Redis（TTL 由 DEVTRACE_MEMORY_TTL_SECONDS 决定，默认 24h），情景记忆和
+    用户画像存 ChromaDB（持久化，无 TTL；删除只能走显式 API/维护脚本）。
     """
 
     WORKING_MAX   = 20    # 工作记忆最大条数，超过则触发压缩
@@ -86,6 +108,7 @@ class MemoryManager:
     SUMMARY_MAX_CHARS = 800
     MEMORY_MAX_TOKENS = 3000  # Leave room for thinking tokens on compatible providers.
     PROFILE_DOC_PREFIX = "user_profile:"
+    memory_ttl_seconds = DEFAULT_MEMORY_TTL_SECONDS  # class fallback for test doubles
 
     def __init__(
         self,
@@ -99,7 +122,12 @@ class MemoryManager:
         namespace:    str = "",
         episodic_collection: str = "episodic",
         profile_collection: str = "user_profile",
+        ttl_seconds:  Optional[int] = None,
     ):
+        # An explicit ttl_seconds is the injection point for tests; otherwise the value
+        # comes from the environment and is clamped to MIN_MEMORY_TTL_SECONDS.
+        self.memory_ttl_seconds = (parse_memory_ttl_seconds(ttl_seconds)
+                                   if ttl_seconds is not None else parse_memory_ttl_seconds())
         kwargs: Dict[str, Any] = {"api_key": api_key}
         if base_url:
             kwargs["base_url"] = base_url
@@ -159,7 +187,7 @@ class MemoryManager:
             "ts":        msg.timestamp.isoformat(),
             "metadata":  msg.metadata,
         }))
-        await self._redis.expire(key, 86400)  # 24h TTL
+        await self._redis.expire(key, self.memory_ttl_seconds)
 
         # 超过压缩阈值时触发压缩
         if await self._redis.llen(key) >= self.COMPRESS_AT:
@@ -257,8 +285,12 @@ class MemoryManager:
             summary=summary,
         )
 
-    async def export_memory(self, user_id: str, conv_id: str) -> Dict[str, Any]:
-        """Export one conversation's persisted memory for inspection/debugging."""
+    async def export_memory(self, user_id: str, conv_id: str,
+                            workspace: str = "") -> Dict[str, Any]:
+        """Export one conversation's persisted memory for inspection/debugging.
+
+        The internal profile document id is deliberately not returned.
+        """
         user_id = self._safe_text(user_id)
         conv_id = self._safe_text(conv_id)
         messages = await self._get_working_memory(user_id, conv_id)
@@ -266,6 +298,8 @@ class MemoryManager:
         profile = await self._get_profile(user_id)
         return {
             "conversation_id": conv_id,
+            "exported_at": datetime.now().isoformat(timespec="seconds"),
+            "workspace": self._safe_text(workspace) or "default",
             "messages": [{"role": message.role.value, "content": message.content,
                           "ts": message.timestamp.isoformat()} for message in messages],
             "summary": summary,
@@ -273,6 +307,54 @@ class MemoryManager:
             "counts": {"messages": len(messages), "summary_chars": len(summary),
                        "has_profile": bool(profile)},
         }
+
+    async def forget_profile(self, user_id: str) -> Dict[str, Any]:
+        """Delete this user's profile documents only.
+
+        Conversations, summaries and episodic records are untouched, and no other
+        user's profile is reachable because every id comes from this user_id.
+        """
+        user_id = self._safe_text(user_id)
+        doc_ids = await self._profile_ids(user_id)
+        deleted: List[str] = []
+        error = ""
+        if doc_ids:
+            try:
+                await asyncio.to_thread(self._profile.delete, ids=doc_ids)
+                deleted = doc_ids
+            except Exception as exc:  # noqa: BLE001 - Chroma may reject an empty/odd batch
+                error = str(exc)[:200]
+        return {"profile_deleted": bool(deleted),
+                "deleted_documents": len(deleted),
+                "error": error,
+                "conversation_memory_kept": True,
+                "episodic_kept": True}
+
+    async def _profile_ids(self, user_id: str) -> List[str]:
+        """Every profile id belonging to this user: current doc id plus legacy rows."""
+        found: List[str] = []
+
+        def collect(payload: Any) -> None:
+            rows = payload or {}
+            documents = rows.get("documents") or []
+            for index, doc_id in enumerate(rows.get("ids") or []):
+                if index < len(documents) and not documents[index]:
+                    continue  # Chroma can echo a requested id that does not exist
+                if doc_id:
+                    found.append(str(doc_id))
+
+        try:
+            direct = await asyncio.to_thread(self._profile.get,
+                                             ids=[self._profile_doc_id(user_id)])
+            collect(direct)
+        except Exception:  # noqa: BLE001 - an unavailable collection means nothing to delete
+            pass
+        try:
+            legacy = await asyncio.to_thread(self._profile.get, where={"user_id": user_id})
+            collect(legacy)
+        except Exception:  # noqa: BLE001
+            pass
+        return list(dict.fromkeys(found))
 
     async def forget_conversation(self, user_id: str, conv_id: str) -> Dict[str, Any]:
         """Delete one conversation's working memory, summary and episodic records.
@@ -331,7 +413,7 @@ class MemoryManager:
         skey = self._summary_key(user_id, conv_id)
         old_summary = await self._redis.get(skey) or ""
         new_summary = await self._merge_summary(old_summary, summary)
-        await self._redis.setex(skey, 86400, new_summary)
+        await self._redis.setex(skey, self.memory_ttl_seconds, new_summary)
 
         # 旧消息存入情景记忆
         await self._store_episodic(user_id, conv_id, text, summary)
@@ -344,7 +426,7 @@ class MemoryManager:
                 "role": m.role.value, "content": m.content,
                 "ts": m.timestamp.isoformat(), "metadata": m.metadata,
             }))
-        await self._redis.expire(key, 86400)
+        await self._redis.expire(key, self.memory_ttl_seconds)
         logger.info(f"工作记忆压缩完成: {user_id}/{conv_id}，摘要 {len(summary)} 字")
 
     # ── 内部辅助 ──────────────────────────────────────────────────────────────

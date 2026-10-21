@@ -482,6 +482,20 @@ async def developer_memory_delete(conversation_id: str, user_id: str = Depends(c
     return result
 
 
+@app.delete('/developer/profile', tags=['开发者助手'])
+async def developer_profile_delete(user_id: str = Depends(current_user)):
+    """Forget this user's long-term profile only (conversations and episodic memory stay)."""
+    if _developer is None:
+        raise HTTPException(503, '开发者助手未就绪')
+    workspace = _workspace_of(user_id)
+    result = await _developer.memory.forget_profile(user_id)
+    result['workspace'] = workspace
+    await audit.record(_developer.redis, 'memory.profile_delete', actor=user_id,
+                       resource='profile', status='success', workspace=workspace,
+                       detail={'kind': 'profile', 'success': bool(result['profile_deleted'])})
+    return result
+
+
 @app.get('/developer/runs', tags=['开发者助手'])
 async def developer_runs(user_id: str = Depends(current_user)):
     if _developer is None:
