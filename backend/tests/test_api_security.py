@@ -1,8 +1,10 @@
 import asyncio
+import contextlib
 import json
 import os
 import time
 import unittest
+from unittest import mock
 
 import httpx
 from api import main
@@ -144,23 +146,47 @@ class ApiSecurityTests(unittest.IsolatedAsyncioTestCase):
         started = await anext(iterator)
         task_id = json.loads(started.split('data: ', 1)[1])['task_id']
 
+        # Synchronise on product effects, not on CPU scheduling: 'entered' proves the
+        # worker is mid-run, and the task-record write proves the disconnect landed.
+        cancelled_write = asyncio.Event()
+        original = main._write_task_record
+
+        async def spy(redis, id_, user_id, status, run_id=None, workspace=None, trace_id=None):
+            record = await original(redis, id_, user_id, status, run_id,
+                                     workspace=workspace, trace_id=trace_id)
+            if id_ == task_id and status == 'cancelled':
+                cancelled_write.set()
+            return record
+
         async def consume():
             async for _ in iterator:
                 pass
 
-        consumer = asyncio.create_task(consume())
-        await asyncio.sleep(0.05)
-        consumer.cancel()
-        with self.assertRaises(asyncio.CancelledError):
-            await consumer
-        record = {}
-        for _ in range(100):
-            raw = self.assistant.redis.values.get(f'developer:task:{task_id}')
-            record = json.loads(raw) if raw else {}
-            if record.get('status') != 'running':
-                break
-            await asyncio.sleep(0.02)
-        self.assertEqual(record.get('status'), 'cancelled')
+        with mock.patch.object(main, '_write_task_record', spy):
+            consumer = asyncio.create_task(consume())
+            await asyncio.wait_for(self.assistant.entered.wait(), timeout=5)
+            # anyio/Starlette cancel level-triggered: CancelledError is re-raised at every
+            # checkpoint. One asyncio Task.cancel() can be swallowed by the generator's own
+            # asyncio.wait_for(queue.get()) when a timeline event is already queued, which is
+            # what made the old sleep(0.05) + poll version flaky. Keep the cancellation armed
+            # until the disconnect cleanup writes the record; the event, not a sleep, ends it.
+            consumer.cancel()
+            for _ in range(100):
+                try:
+                    await asyncio.wait_for(cancelled_write.wait(), timeout=0.05)
+                    break
+                except asyncio.TimeoutError:
+                    consumer.cancel()
+            else:
+                self.fail('cancelled stream never wrote a cancelled task record')
+            consumer.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                # Whether the cancelled consumer task surfaces CancelledError or finishes
+                # normally depends on where the cancellation lands (the shielded cleanup
+                # swallows it); the guaranteed contract is the record and the lock below.
+                await consumer
+        self.assertEqual(json.loads(self.assistant.redis.values[f'developer:task:{task_id}'])['status'],
+                         'cancelled')
         self.assertFalse(self.assistant.redis.held)
 
     async def test_running_task_is_repaired_after_its_worker_disappears(self):
