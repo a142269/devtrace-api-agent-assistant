@@ -2,8 +2,11 @@
 
 Implements initialize / tools/list / tools/call, plus a stdio entrypoint
 (``python -m mcp.server``) so the same tools can be hosted as a real MCP
-process. The server is transport-agnostic: ``handle`` takes a JSON-RPC request
-dict and returns a JSON-RPC response dict (or None for notifications).
+process. The stdio wire format is UTF-8 newline-delimited JSON: the entrypoint
+reconfigures stdin/stdout itself, so Chinese tool text survives a Windows
+locale codec without the caller having to set ``PYTHONUTF8``. The server is
+transport-agnostic: ``handle`` takes a JSON-RPC request dict and returns a
+JSON-RPC response dict (or None for notifications).
 """
 import asyncio
 import inspect
@@ -133,12 +136,29 @@ def build_default_server(runtime: Any = None) -> MCPServer:
     return server
 
 
+def force_utf8_stdio(*streams: Any) -> List[str]:
+    """Return the streams switched to UTF-8; streams without ``reconfigure`` are skipped.
+
+    On Windows a redirected stdio gets the locale codec (cp936), which would write the
+    Chinese tool descriptions as bytes a UTF-8 client cannot decode.
+    """
+    reconfigured: List[str] = []
+    for stream in streams:
+        try:
+            stream.reconfigure(encoding='utf-8')
+        except (AttributeError, ValueError, OSError):
+            continue
+        reconfigured.append(type(stream).__name__)
+    return reconfigured
+
+
 async def _stdio_loop() -> None:
     """Serve newline-delimited JSON-RPC over stdin/stdout.
 
     Lines are read on a worker thread because the Windows proactor loop cannot attach
     ``connect_read_pipe`` to a redirected stdin handle, which would hang the process.
     """
+    force_utf8_stdio(sys.stdin, sys.stdout)
     server = build_default_server()
     loop = asyncio.get_running_loop()
     while True:

@@ -30,7 +30,7 @@ class InProcessTransport:
 
 
 class StdioTransport:
-    """Spawn a child process and exchange one JSON object per line on its stdio.
+    """Spawn a child process and exchange one UTF-8 JSON object per line on its stdio.
 
     With no command it starts the bundled server (`python -m mcp.server`); a registry
     entry supplies its own executable and arguments for third-party servers.
@@ -44,12 +44,21 @@ class StdioTransport:
         self._process = None
         self._lock = asyncio.Lock()
 
+    def _child_env(self) -> dict:
+        """Force UTF-8 in the child: an inherited ``PYTHONUTF8=0`` is overridden by design.
+
+        Without it a Windows child writes the Chinese tool text in cp936 and the
+        ``readline`` + ``decode("utf-8")`` below raises UnicodeDecodeError.
+        """
+        return {**os.environ, 'PYTHONUTF8': '1'}
+
     async def start(self) -> None:
         if self._process is None:
             self._process = await asyncio.create_subprocess_exec(
                 *self.command,
                 stdin=asyncio.subprocess.PIPE, stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.DEVNULL, cwd=self.cwd)
+                stderr=asyncio.subprocess.DEVNULL, cwd=self.cwd,
+                env=self._child_env())
 
     async def request(self, payload: dict) -> dict:
         await self.start()
