@@ -18,7 +18,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 from fastapi.security import HTTPAuthorizationCredentials
 from pydantic import BaseModel, ConfigDict, Field
-from redis.exceptions import LockError
+from redis.exceptions import LockError, RedisError
 
 from api.auth import (authenticated_user, bearer, issue_token,
                       require_admin, settings as auth_settings, verify_password, workspace_for)
@@ -350,7 +350,9 @@ def current_user(request: Request, credentials: Optional[HTTPAuthorizationCreden
     return authenticated_user(request, credentials)
 
 async def limit(key: str, maximum: int, *, retry_after: Optional[int] = None) -> None:
-    # INCR and expiry are atomic, and shared by all application workers.
+    # INCR and expiry are atomic, and shared by all application workers. Requests that
+    # are rejected inside the window still increment it, so a burst of refusals extends
+    # the effective throttle for that key. This is deliberate and stays unchanged.
     count = await _developer.redis.eval(
         "local n=redis.call('INCR',KEYS[1]); if n==1 then redis.call('EXPIRE',KEYS[1],60) end; return n",
         1, key)
@@ -360,6 +362,38 @@ async def limit(key: str, maximum: int, *, retry_after: Optional[int] = None) ->
 
 CHAT_LIMIT_MAXIMUM = 30
 CHAT_LIMIT_WINDOW_SECONDS = 60
+LOGIN_LIMIT_MAXIMUM = 10
+LOGIN_LIMIT_RETRY_AFTER = 60
+# Fail-open covers infrastructure faults only: a real quota breach raises HTTPException
+# and always reaches the client. redis-py faults are RedisError/OSError subclasses, and
+# asyncio timeouts surface as asyncio.TimeoutError.
+LIMITER_INFRA_ERRORS = (RedisError, OSError, asyncio.TimeoutError)
+
+
+def _login_limit_key(client: str) -> str:
+    return 'developer:login-limit:' + hashlib.sha256(client.encode()).hexdigest()
+
+
+async def enforce_limit(kind: str, key: str, maximum: int, *,
+                        retry_after: Optional[int] = None) -> None:
+    """Run one limiter window, failing open when Redis itself is unavailable.
+
+    Availability wins over enforcement here: this is a demo-grade trade-off, so a Redis
+    fault lets the request through with a warning and an audit event instead of returning
+    500. Under a real outage the quota is simply not enforced; production deployments
+    belong behind a gateway or replicated limiter instead of this path.
+    """
+    try:
+        await limit(key, maximum, retry_after=retry_after)
+    except HTTPException:
+        raise
+    except LIMITER_INFRA_ERRORS as exc:
+        logger.warning('限流不可用，已 fail-open 放行: kind=%s reason=%s',
+                       kind, type(exc).__name__)
+        await audit.record(_developer.redis, f'{kind}.rate_limit_unavailable',
+                           status='failure',
+                           detail={'kind': kind, 'status': 'failure',
+                                   'reason_code': 'limiter_unavailable'})
 
 
 def _chat_limit_key(user_id: str) -> str:
@@ -369,8 +403,8 @@ def _chat_limit_key(user_id: str) -> str:
 async def enforce_chat_limit(user_id: str) -> None:
     """Shared user quota: the sync and the streaming entry points spend the same key."""
     try:
-        await limit(_chat_limit_key(user_id), CHAT_LIMIT_MAXIMUM,
-                    retry_after=CHAT_LIMIT_WINDOW_SECONDS)
+        await enforce_limit('chat', _chat_limit_key(user_id), CHAT_LIMIT_MAXIMUM,
+                            retry_after=CHAT_LIMIT_WINDOW_SECONDS)
     except HTTPException as exc:
         await audit.record(_developer.redis, 'chat.rate_limited', actor=user_id,
                            status='failure', workspace=_workspace_of(user_id),
@@ -383,7 +417,8 @@ async def login(req: LoginRequest, request: Request):
     if _developer is None:
         raise HTTPException(503, '服务未就绪')
     client = request.client.host if request.client else 'unknown'
-    await limit('developer:login-limit:' + hashlib.sha256(client.encode()).hexdigest(), 10)
+    await enforce_limit('login', _login_limit_key(client), LOGIN_LIMIT_MAXIMUM,
+                        retry_after=LOGIN_LIMIT_RETRY_AFTER)
     # Perform the same password derivation for unknown users to reduce account enumeration.
     encoded = request.app.state.users.get(req.username, 'pbkdf2_sha256$' + '00' * 16 + '$' + '00' * 32)
     if not verify_password(req.password, encoded) or req.username not in request.app.state.users:
