@@ -1,0 +1,153 @@
+{
+  "verified_at": "2026-10-22T15:09:01+0800",
+  "stack": "devtrace-verify (API 18002, DEVELOPER_MODEL_MODE=anthropic, queue enabled, 2 workers)",
+  "quota_preseed": "the Redis counter developer:chat-limit:<sha256(user)> was SET to 30 (EX 60) by the test driver; 31 real model-backed streams were NOT sent",
+  "requests_sent": 2,
+  "stream_rejected_before_model": {
+    "http_status": 429,
+    "retry_after": "60",
+    "events": {
+      "started": 0,
+      "timeline": 0,
+      "progress": 0,
+      "complete": 0,
+      "error": 0
+    },
+    "event_order": [],
+    "task_id": null,
+    "run_id": null,
+    "conversation_id": null,
+    "detail": "请求过于频繁，请稍后重试",
+    "elapsed_ms": 3.7,
+    "marker_leaked_in_body": false
+  },
+  "sync_rejected_before_model": {
+    "http_status": 429,
+    "retry_after": "60",
+    "elapsed_ms": 46.9,
+    "run_id": null,
+    "task_id": null,
+    "detail": "请求过于频繁，请稍后重试",
+    "marker_leaked_in_body": false
+  },
+  "redis_side_effects": {
+    "chat_limit_count_before": 0,
+    "chat_limit_count_after": 32,
+    "task_record_keys_delta": 0,
+    "run_record_keys_delta": 0,
+    "idempotency_cache_keys_delta": 0,
+    "plan_checkpoint_keys_delta": 0,
+    "audit_entries_delta": 4,
+    "chat_limit_count_after_explanation": "30 was preseeded, then each rejected request still runs INCR before the check (fixed-window semantics inherited from P1, unchanged in P7): 30 + 2 = 32"
+  },
+  "worker_enqueue_log": {
+    "before": 0,
+    "after": 0,
+    "delta": 0,
+    "scope": "grep -c 'task enqueued' across both worker container logs"
+  },
+  "audit": {
+    "recent_event_names": {
+      "chat.rate_limited": 6,
+      "auth.login.success": 13,
+      "chat.sync": 82,
+      "tool.call": 152,
+      "task.finished": 43,
+      "task.enqueued": 4
+    },
+    "rate_limited_count": 6,
+    "rate_limited_status": {
+      "failure": 6
+    },
+    "rate_limited_detail_keys": [
+      "kind",
+      "reason_code",
+      "status"
+    ],
+    "count_is_cumulative": "the Redis volume survives `down` without `-v`, so chat.rate_limited=6 counts every rate-limited request retained in the stream; this run contributed exactly 2, matching audit_entries_delta=4 (2 chat.rate_limited + 2 auth.login.success, one login per phase)"
+  },
+  "audit_detail_keys_outside_whitelist": [],
+  "latency_comparison": {
+    "rejected_stream_ms": 3.7,
+    "rejected_sync_ms": 46.9,
+    "real_model_request_mean_ms": 11321.6,
+    "real_model_request_max_ms": 13314.5,
+    "holdout_requests": 43,
+    "conclusion": "the 429 round-trips are orders of magnitude faster than a real model diagnosis, so no model call was made"
+  },
+  "scope_note": "P7's limiter was already proven in rules mode with 31 concurrent streams; this run only closes the real-provider gap with 2 rejected requests.",
+  "limitations": "No browser-side 429 rendering check unless reported separately; Redis outage degradation of the limiter path is still untested; a real 31-concurrent provider-mode burst was deliberately not sent (cost).",
+  "redis_snapshots": {
+    "p8_snap_before.json": {
+      "chat_limit_count": 0,
+      "chat_limit_ttl": -2,
+      "task_record_keys": 167,
+      "run_record_keys": 320,
+      "idempotency_cache_keys": 35,
+      "plan_checkpoint_keys": 315,
+      "audit_len": 1285
+    },
+    "p8_snap_seeded.json": {
+      "chat_limit_count": 30,
+      "chat_limit_ttl": 59,
+      "task_record_keys": 167,
+      "run_record_keys": 320,
+      "idempotency_cache_keys": 35,
+      "plan_checkpoint_keys": 315,
+      "audit_len": 1285
+    },
+    "p8_snap_after_stream.json": {
+      "chat_limit_count": 31,
+      "chat_limit_ttl": 58,
+      "task_record_keys": 167,
+      "run_record_keys": 320,
+      "idempotency_cache_keys": 35,
+      "plan_checkpoint_keys": 315,
+      "audit_len": 1287
+    },
+    "p8_snap_after.json": {
+      "chat_limit_count": 32,
+      "chat_limit_ttl": 56,
+      "task_record_keys": 167,
+      "run_record_keys": 320,
+      "idempotency_cache_keys": 35,
+      "plan_checkpoint_keys": 315,
+      "audit_len": 1289
+    }
+  },
+  "browser_429_rendering": {
+    "stack_change_for_this_check": "compose overlay also allowed the vite dev origin 5174 (5173 is occupied by an unrelated container); in the end the page used vite's own /api/python proxy, so the CORS allowance was not required for the check. Product code and backend/.env untouched.",
+    "quota_preseed": "chat-limit counter SET to 30 with EX 120 again for this page load - no model call",
+    "steps": [
+      {
+        "step": "login",
+        "detail": "chat panel visible"
+      },
+      {
+        "step": "429 rendering",
+        "detail": "too_frequent=true retry_hint=true server_bodies_marker=false assistant_bubble_marker=false"
+      },
+      {
+        "step": "http",
+        "detail": "[{\"url\":\"http://localhost:5174/api/python/developer/chat/stream\",\"status\":429,\"retry_after\":\"60\",\"body_contains_marker\":false,\"body\":\"{\\\"detail\\\":\\\"请求过于频繁，请稍后重试\\\"}\"}]"
+      }
+    ],
+    "stream_http_status": [
+      429
+    ],
+    "retry_after_headers": [
+      "60"
+    ],
+    "too_frequent_rendered": true,
+    "retry_hint_rendered": true,
+    "assistant_message_text": "开发者助手\n\n请求过于频繁，请稍后重试（请约 60 秒后重试）",
+    "rejected_response_bodies": [
+      "{\"detail\":\"请求过于频繁，请稍后重试\"}"
+    ],
+    "server_bodies_contain_message_marker": false,
+    "assistant_bubble_contains_message_marker": false,
+    "note_on_marker": "the marker is typed by the test itself, so the user's own bubble naturally echoes it; only the server 429 body and the assistant bubble are checked",
+    "passed": true,
+    "screenshot": "p8-frontend-429-2026-10-22.png (workspace root, not committed)"
+  }
+}
