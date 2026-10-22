@@ -1,9 +1,12 @@
-"""P10: Chroma episodic retention CLI.
+"""P10 + P11: Chroma episodic retention CLI.
 
 The CLI is the only path that removes cross-session history, so the tests pin the
 boundaries: dry-run by default, --apply deletes only rows older than the cutoff, rows
 without a usable ts are skipped rather than guessed at, --user only narrows the scope,
 profile collections are refused and never read, and any Chroma fault exits non-zero.
+P11 adds the page walk: paging is a memory property only, so the counts, the candidates
+and the delete batches must come out identical to the single-read path — and a client
+that cannot page (or ignores offset) must still terminate without deleting twice.
 """
 import contextlib
 import io
@@ -26,14 +29,22 @@ class FakeCollection:
         self.fail_get = fail_get
         self.fail_delete = fail_delete
         self.get_calls = 0
+        self.get_windows = []
         self.delete_calls = []
 
-    def get(self, include=None):
+    def get(self, include=None, limit=None, offset=None):
         self.get_calls += 1
         if self.fail_get:
             raise ConnectionError('Chroma server unreachable')
-        return {'ids': [item['id'] for item in self.rows],
-                'metadatas': [item['metadata'] for item in self.rows]}
+        rows = self.rows
+        if limit is not None or offset:
+            self.get_windows.append((limit, offset or 0))
+        if limit is not None:
+            rows = rows[offset or 0:(offset or 0) + limit]
+        elif offset:
+            rows = rows[offset:]
+        return {'ids': [item['id'] for item in rows],
+                'metadatas': [item['metadata'] for item in rows]}
 
     def delete(self, ids=None):
         if self.fail_delete:
@@ -61,6 +72,23 @@ class FakeClient:
 class StorageErrorClient(FakeClient):
     def get_or_create_collection(self, name, **_kwargs):
         raise ConnectionError('Chroma is down')
+
+
+class NoPagingCollection(FakeCollection):
+    """A Chroma build whose ``get`` has no limit/offset kwargs at all."""
+
+    def get(self, include=None):        # signature deliberately rejects limit/offset
+        return super().get(include=include)
+
+
+class OffsetIgnoringCollection(FakeCollection):
+    """Accepts limit/offset but ignores them — always answers with the whole collection."""
+
+    def get(self, include=None, limit=None, offset=None):
+        self.get_calls += 1
+        self.get_windows.append((limit, offset or 0))
+        return {'ids': [item['id'] for item in self.rows],
+                'metadatas': [item['metadata'] for item in self.rows]}
 
 
 def iso(moment):
@@ -149,6 +177,116 @@ class RunRetentionTests(unittest.TestCase):
         self.assertEqual(collection.get_calls, 0)
 
 
+class RetentionPagingTests(unittest.TestCase):
+    """P11: the scan is paged, and paging must not change a single verdict."""
+
+    def mixed(self, *, prefix='r'):
+        old = iso(NOW - timedelta(days=90))
+        fresh = iso(NOW - timedelta(days=1))
+        return [
+            row(f'{prefix}-0', 'alice', 'c1', old),
+            row(f'{prefix}-1', 'bob', 'c1', fresh),
+            row(f'{prefix}-2', 'alice', 'c2', old),
+            row(f'{prefix}-3', 'carol', 'c2', None),
+            row(f'{prefix}-4', 'bob', 'c3', fresh),
+            row(f'{prefix}-5', 'alice', 'c3', old),
+            row(f'{prefix}-6', 'bob', 'c1', fresh),
+        ]
+
+    def test_dry_run_walks_every_page_and_deletes_nothing(self):
+        collection = FakeCollection(self.mixed())
+        report = retention.run_retention(collection, days=30, now=NOW, page_size=3)
+        self.assertEqual(report['pages'], 3)
+        self.assertEqual(report['page_size'], 3)
+        self.assertEqual(report['scanned'], 7)
+        self.assertEqual(report['candidates'], 3)
+        self.assertEqual(report['kept_fresh'], 3)
+        self.assertEqual(report['skipped_no_ts'], 1)
+        self.assertEqual(report['by_user'], {'alice': 3})
+        self.assertEqual(sorted(report['conversations']), ['c1', 'c2', 'c3'])
+        self.assertEqual(collection.get_windows, [(3, 0), (3, 3), (3, 6)])
+        self.assertEqual(report['deleted'], 0)
+        self.assertEqual(collection.delete_calls, [])
+        self.assertEqual(len(collection.rows), 7)
+
+    def test_apply_across_pages_deletes_only_expired_rows(self):
+        collection = FakeCollection(self.mixed())
+        report = retention.run_retention(collection, days=30, apply=True, now=NOW,
+                                         page_size=2)
+        self.assertEqual(report['pages'], 4)
+        self.assertEqual(report['deleted'], 3)
+        self.assertEqual(sorted(collection.deleted_ids()),
+                         ['r-0', 'r-2', 'r-5'])
+        self.assertEqual(sorted(item['id'] for item in collection.rows),
+                         ['r-1', 'r-3', 'r-4', 'r-6'])
+
+    def test_single_batch_deletes_every_candidate_once(self):
+        collection = FakeCollection(self.mixed())
+        report = retention.run_retention(collection, days=30, apply=True, now=NOW,
+                                         page_size=3, batch_size=2)
+        self.assertEqual(report['deleted'], 3)
+        self.assertEqual(collection.delete_calls, [['r-0', 'r-2'], ['r-5']])
+
+    def test_empty_collection_and_short_last_page_terminate(self):
+        empty = FakeCollection([])
+        report = retention.run_retention(empty, days=30, now=NOW, page_size=500)
+        self.assertEqual(report['pages'], 0)
+        self.assertEqual(report['scanned'], 0)
+        self.assertEqual(empty.get_calls, 1)
+
+        last_short = FakeCollection(self.mixed())
+        report = retention.run_retention(last_short, days=30, now=NOW, page_size=4)
+        self.assertEqual(report['pages'], 2)
+        self.assertEqual(last_short.get_windows, [(4, 0), (4, 4)])
+
+    def test_client_without_limit_offset_falls_back_to_one_full_read(self):
+        collection = NoPagingCollection(self.mixed())
+        report = retention.run_retention(collection, days=30, now=NOW, page_size=3)
+        self.assertEqual(report['pages'], 1)
+        self.assertEqual(report['scanned'], 7)
+        self.assertEqual(report['candidates'], 3)
+        self.assertEqual(report['deleted'], 0)
+
+    def test_client_that_ignores_offset_never_loops_or_double_deletes(self):
+        collection = OffsetIgnoringCollection(self.mixed())
+        report = retention.run_retention(collection, days=30, apply=True, now=NOW,
+                                         page_size=2)
+        self.assertEqual(collection.get_calls, 2)
+        self.assertEqual(report['scanned'], 7)
+        self.assertEqual(report['candidates'], 3)
+        self.assertEqual(len(collection.deleted_ids()),
+                         len(set(collection.deleted_ids())))
+        self.assertEqual(sorted(collection.deleted_ids()), ['r-0', 'r-2', 'r-5'])
+
+    def test_second_apply_is_idempotent(self):
+        collection = FakeCollection(self.mixed())
+        first = retention.run_retention(collection, days=30, apply=True, now=NOW,
+                                        page_size=3)
+        second = retention.run_retention(collection, days=30, apply=True, now=NOW,
+                                         page_size=3)
+        self.assertEqual(first['deleted'], 3)
+        self.assertEqual(second['candidates'], 0)
+        self.assertEqual(second['deleted'], 0)
+        self.assertEqual(collection.delete_calls, [['r-0', 'r-2', 'r-5']])
+
+    def test_page_size_below_bounds_is_rejected_before_any_read(self):
+        collection = FakeCollection(self.mixed())
+        for bad in (0, -1, retention.MAX_PAGE_SIZE + 1):
+            with self.assertRaises(retention.RetentionError):
+                retention.run_retention(collection, days=30, now=NOW, page_size=bad)
+        self.assertEqual(collection.get_calls, 0)
+
+    def test_user_filter_works_page_by_page(self):
+        collection = FakeCollection(self.mixed())
+        report = retention.run_retention(collection, days=30, apply=True, user='alice',
+                                         now=NOW, page_size=2)
+        self.assertEqual(report['deleted'], 3)
+        self.assertEqual(sorted(collection.deleted_ids()), ['r-0', 'r-2', 'r-5'])
+        self.assertEqual(report['out_of_scope'], 4)
+        self.assertEqual([item['id'] for item in collection.rows],
+                         ['r-1', 'r-3', 'r-4', 'r-6'])
+
+
 class CliTests(unittest.TestCase):
     def build(self, *rows, **kwargs):
         episodic = FakeCollection(list(rows), **kwargs)
@@ -230,6 +368,55 @@ class CliTests(unittest.TestCase):
         self.assertEqual(profile.get_calls, 0)
         self.assertEqual(episodic.delete_calls, [])
         self.assertEqual(client.requested, [])
+
+    def test_page_size_validation_exits_with_usage_error(self):
+        client, _episodic, _profile = self.build()
+        for bad in ('0', '-1', 'abc', '5001'):
+            with self.assertRaises(SystemExit) as caught:
+                retention.main(['--days', '30', '--page-size', bad],
+                               client_factory=lambda: client)
+            self.assertEqual(caught.exception.code, 2)
+            self.assertEqual(_episodic.get_calls, 0)
+
+    def test_page_size_reaches_the_report_and_pages_the_scan(self):
+        client, episodic, _profile = self.build(
+            row('old-1', 'alice', 'c1', iso(NOW - timedelta(days=100))),
+            row('new-1', 'alice', 'c1', iso(NOW - timedelta(days=1))),
+            row('old-2', 'bob', 'c2', iso(NOW - timedelta(days=100))),
+            row('undated', 'bob', 'c2', 'oops'),
+            row('new-2', 'carol', 'c3', iso(NOW - timedelta(days=2))))
+        code, out, err = self.run_cli(['--days', '30', '--json', '--page-size', '2'],
+                                      client)
+        self.assertEqual((code, err), (0, ''))
+        report = json.loads(out)
+        self.assertEqual(report['page_size'], 2)
+        self.assertEqual(report['pages'], 3)
+        self.assertEqual(report['scanned'], 5)
+        self.assertEqual(report['candidates'], 2)
+        self.assertEqual(report['skipped_no_ts'], 1)
+        self.assertEqual(report['kept_fresh'], 2)
+        self.assertEqual(episodic.get_windows, [(2, 0), (2, 2), (2, 4)])
+        self.assertEqual(episodic.delete_calls, [])
+
+    def test_text_output_reports_the_page_walk(self):
+        client, _episodic, _profile = self.build(
+            row('old-1', 'alice', 'c1', iso(NOW - timedelta(days=100))),
+            row('old-2', 'bob', 'c2', iso(NOW - timedelta(days=100))),
+            row('new-1', 'bob', 'c2', iso(NOW - timedelta(days=1))))
+        code, out, _err = self.run_cli(['--days', '30', '--page-size', '2'], client)
+        self.assertEqual(code, 0)
+        self.assertIn('分 2 页读取', out)
+        self.assertIn('每页 2 条', out)
+
+    def test_paged_profile_request_is_still_refused_without_reading(self):
+        client, episodic, profile = self.build(
+            row('old', 'alice', 'c1', iso(NOW - timedelta(days=100))))
+        code, _out, err = self.run_cli(['--days', '30', '--apply', '--page-size', '1',
+                                        '--collection', 'developer_profile'], client)
+        self.assertEqual(code, 1)
+        self.assertIn('拒绝', err)
+        self.assertEqual(profile.get_calls, 0)
+        self.assertEqual(episodic.get_calls, 0)
 
     def test_guard_rejects_any_profile_name(self):
         for name in ('user_profile', 'Developer_Profile', 'developer_episodic'):
