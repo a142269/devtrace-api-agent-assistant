@@ -1,0 +1,268 @@
+{
+  "generated_at": "2026-10-22T14:09:53+0800",
+  "stack": "devtrace-verify (API 18002, DEVELOPER_MODEL_MODE=rules, zero paid model calls)",
+  "scope": "P7 streaming rate limiting + centralized DEVTRACE_REDIS_TTL_SECONDS",
+  "queue_enabled_run": {
+    "stack": "devtrace-verify (API 18002, DEVELOPER_MODEL_MODE=rules)",
+    "single_stream_request": {
+      "http_status": 200,
+      "quota_units_spent": 1,
+      "task_records_created": 1
+    },
+    "burst_of_31_streams": {
+      "requests": 31,
+      "accepted_200": 29,
+      "rejected_429": 2,
+      "other_status": [],
+      "retry_after_values": [
+        "60"
+      ],
+      "rejected_detail_text": [
+        "请求过于频繁，请稍后重试"
+      ],
+      "rejected_with_started_event": 0,
+      "rejected_with_task_id": 0,
+      "marker_in_rejected_bodies": false,
+      "accepted_run_ids": 29
+    },
+    "burst_side_effects": {
+      "quota_units_spent": 31,
+      "task_records_created": 29,
+      "expected_task_records": 29
+    },
+    "sync_after_stream_burn": {
+      "http_status": 429,
+      "retry_after": "60",
+      "detail": "请求过于频繁，请稍后重试",
+      "marker_leaked": false
+    },
+    "sync_side_effects": {
+      "task_records_created": 0,
+      "run_records_created": 0
+    },
+    "audit": {
+      "recent_event_names": {
+        "chat.rate_limited": 3,
+        "auth.login.success": 5,
+        "task.finished": 54,
+        "tool.call": 64,
+        "task.enqueued": 54,
+        "chat.sync": 20
+      },
+      "recent_detail_keys": [
+        "attempts",
+        "kind",
+        "latency_ms",
+        "reason_code",
+        "status",
+        "success",
+        "tool"
+      ],
+      "rate_limited_count": 3,
+      "rate_limited_detail_keys": [
+        "kind",
+        "reason_code",
+        "status"
+      ]
+    },
+    "audit_detail_keys_outside_whitelist": []
+  },
+  "in_process_run": {
+    "stack": "devtrace-verify (API 18002, DEVELOPER_MODEL_MODE=rules)",
+    "single_stream_request": {
+      "http_status": 200,
+      "quota_units_spent": 1,
+      "task_records_created": 1
+    },
+    "burst_of_31_streams": {
+      "requests": 31,
+      "accepted_200": 29,
+      "rejected_429": 2,
+      "other_status": [],
+      "retry_after_values": [
+        "60"
+      ],
+      "rejected_detail_text": [
+        "请求过于频繁，请稍后重试"
+      ],
+      "rejected_with_started_event": 0,
+      "rejected_with_task_id": 0,
+      "marker_in_rejected_bodies": false,
+      "accepted_run_ids": 29
+    },
+    "burst_side_effects": {
+      "quota_units_spent": 31,
+      "task_records_created": 29,
+      "expected_task_records": 29
+    },
+    "sync_after_stream_burn": {
+      "http_status": 429,
+      "retry_after": "60",
+      "detail": "请求过于频繁，请稍后重试",
+      "marker_leaked": false
+    },
+    "sync_side_effects": {
+      "task_records_created": 0,
+      "run_records_created": 0
+    },
+    "audit": {
+      "recent_event_names": {
+        "chat.rate_limited": 6,
+        "auth.login.success": 8,
+        "task.finished": 63,
+        "chat.sync": 30,
+        "tool.call": 63,
+        "task.enqueued": 30
+      },
+      "recent_detail_keys": [
+        "attempts",
+        "kind",
+        "latency_ms",
+        "reason_code",
+        "status",
+        "success",
+        "tool"
+      ],
+      "rate_limited_count": 6,
+      "rate_limited_detail_keys": [
+        "kind",
+        "reason_code",
+        "status"
+      ]
+    },
+    "audit_detail_keys_outside_whitelist": []
+  },
+  "ttl_runs": {
+    "default_86400": {
+      "idempotency_cache": {
+        "redis_field": "developer:request",
+        "ttl": 86389,
+        "exists": true
+      },
+      "plan_checkpoint": {
+        "redis_field": "developer:plan",
+        "ttl": 86384,
+        "exists": true
+      },
+      "run_record": {
+        "redis_field": "developer:run",
+        "ttl": 86389,
+        "exists": true
+      },
+      "run_history_index": {
+        "redis_field": "developer:run-index",
+        "ttl": 86392,
+        "exists": true
+      },
+      "task_record": {
+        "redis_field": "developer:task",
+        "ttl": 86398,
+        "exists": true
+      },
+      "task_events": {
+        "redis_field": "developer:task-events",
+        "ttl": 86392,
+        "exists": true
+      }
+    },
+    "configured_120_queue_path": {
+      "idempotency_cache": {
+        "redis_field": "developer:request",
+        "ttl": 109,
+        "exists": true
+      },
+      "plan_checkpoint": {
+        "redis_field": "developer:plan",
+        "ttl": 104,
+        "exists": true
+      },
+      "run_record": {
+        "redis_field": "developer:run",
+        "ttl": 109,
+        "exists": true
+      },
+      "run_history_index": {
+        "redis_field": "developer:run-index",
+        "ttl": 113,
+        "exists": true
+      },
+      "task_record": {
+        "redis_field": "developer:task",
+        "ttl": 119,
+        "exists": true
+      },
+      "task_events": {
+        "redis_field": "developer:task-events",
+        "ttl": 113,
+        "exists": true
+      }
+    },
+    "configured_120_in_process": {
+      "idempotency_cache": {
+        "redis_field": "developer:request",
+        "ttl": 110,
+        "exists": true
+      },
+      "plan_checkpoint": {
+        "redis_field": "developer:plan",
+        "ttl": 104,
+        "exists": true
+      },
+      "run_record": {
+        "redis_field": "developer:run",
+        "ttl": 110,
+        "exists": true
+      },
+      "run_history_index": {
+        "redis_field": "developer:run-index",
+        "ttl": 113,
+        "exists": true
+      },
+      "task_record": {
+        "redis_field": "developer:task",
+        "ttl": 119,
+        "exists": true
+      },
+      "task_events": {
+        "redis_field": "developer:task-events",
+        "ttl": -2,
+        "exists": false
+      }
+    },
+    "memory_knob_stays_separate": {
+      "memory_key_family": "developer:wm:*",
+      "memory_keys": 276,
+      "freshest_memory_ttls": [
+        86310,
+        86301,
+        86262
+      ],
+      "transient_keys_under_ttl_120": {
+        "idempotency_cache": 26,
+        "plan_checkpoint": 21,
+        "run_record": 26,
+        "run_history_index": 30,
+        "task_record": 36,
+        "task_events": 30
+      }
+    },
+    "parser_clamp_table_in_container": {
+      "abc": 86400,
+      "": 86400,
+      "  ": 86400,
+      "59": 60,
+      "0": 60,
+      "-1": 60,
+      "7200": 7200,
+      "86400s": 86400,
+      "3600.5": 86400,
+      "120": 120
+    }
+  },
+  "notes": [
+    "TTL 数值是 redis TTL 命令的实时剩余秒数，因此略小于写入值。",
+    "developer:task-events 在进程内 SSE 路径下不存在（该 key 只由队列写入），task_record 由 api/main.py 写入。",
+    "burst 阶段的 quota_units_spent=31 大于 accepted_200=29：固定窗口 INCR 先于判定，被拒请求同样占用计数。",
+    "本文件不含消息正文、口令、令牌或用户标识；429 断言只记录状态码、Retry-After 与固定文案。"
+  ]
+}

@@ -31,19 +31,19 @@
 
 响应包含 `conversation_id`、`run_id`、`answer`、`plan`、`actions`、`timeline`、`evidence`、`diagnosis`、`security`、`memory_used`、`metrics`、可选 `ticket_id` 和 `decision_mode`。`decision_mode` 区分 `model`、`rules` 和 `rules_fallback`。`diagnosis` 除 `hypotheses`（含 `code`、`description`、`status`、`confidence`、`evidence`、`contradicted_by`、`next_evidence`、`remediation`）外，还有整体 `status`（`evidence_available` / `conflicting_evidence` / `insufficient_evidence`）、`summary`、`conflicts` 和 `linkages`。`security` 给出 `injection_suspected`、`flags`、`tainted_sources` 与 `policy`；`actions[].tainted` 标记来自不可信记录的观察。等待补充时可用同一 `conversation_id` 继续。`GET /developer/runs` 和 `GET /developer/runs/{run_id}` 根据认证身份授权；客户端不能指定 `user_id`。
 
-流式接口的 `started` 事件提供独立的 `task_id`；`GET /developer/tasks/{task_id}` 可查询该用户的状态。断开连接时记录 `cancelled`，同会话可从最近检查点继续。任务记录带心跳时间：SSE 事件与 15 秒空闲心跳都会刷新 `updated_at`，`running` 超过 240 秒未更新会在查询时改为 `interrupted`，进程启动时也会把上一进程残留的 `running` 一并修正（仅适用于单进程/单副本共享 Redis）。没有持久任务队列，也不会自动重跑中断任务，中断后需在同一会话发送“继续”。
+流式接口的 `started` 事件提供独立的 `task_id`；`GET /developer/tasks/{task_id}` 可查询该用户的状态。断开连接时记录 `cancelled`，同会话可从最近检查点继续。任务记录带心跳时间：SSE 事件与 15 秒空闲心跳都会刷新 `updated_at`，`running` 超过 240 秒未更新会在查询时改为 `interrupted`，进程启动时也会把上一进程残留的 `running` 一并修正（仅适用于单进程/单副本共享 Redis）。同步与流式入口共用同一把 30 次/60 秒的用户级限流（2026-10-22 P7 起），流式超限在建立连接或入队之前返回 HTTP 429 + `Retry-After: 60`，不会创建任务记录、入队或写 `started`；连接建立后不再中途限流。`DEVTRACE_TASK_QUEUE=enabled` 时由持久队列执行（Compose 默认），进程内模式不会自动重跑中断任务，中断后需在同一会话发送“继续”。
 
 ## 设计边界
 
 - 计划生成和下一行动选择可由模型决定；服务端限制工具白名单、从用户或查询结果获取标识符，并控制单轮最多 5 次行动与 1 次计划调整。
 - 模型提出的合法工具顺序会影响批准计划；服务端补齐必需证据、修正依赖，并只允许从当前可执行步骤中选择行动。`plan.proposed_tools`、`approved_tools` 和 `adjustments` 可用于对照审查。最终答复由成功的工具观察整理生成。开发者工具是项目内注册与调用，并未提供独立 MCP 协议服务。
-- Redis 保存 24 小时计划状态和运行记录；开发者记忆使用独立键前缀、`developer_episodic` 和 `developer_profile` collection；文档位于独立的 `developer_knowledge` collection。
+- Redis 计划状态和运行记录的有效期由 `DEVTRACE_REDIS_TTL_SECONDS` 统一配置（2026-10-22 P7 起，默认 86400 秒即 24 小时、下限 60 秒）；开发者记忆使用独立键前缀、`developer_episodic` 和 `developer_profile` collection；文档位于独立的 `developer_knowledge` collection。工作记忆与摘要的过期由另一个开关 `DEVTRACE_MEMORY_TTL_SECONDS` 控制，两者互不影响。
 - 回复、界面和工单均说明数据来自本地模拟平台；不接入真实开发者账号、生产日志或工单系统。
 - JWT 仅提供本地演示身份，仍需生产身份服务、TLS、密钥轮换和真实业务权限。请求幂等结果在完成后缓存；进程在副作用与结果缓存之间崩溃时并不保证通用操作恰好一次。模拟工单自身另有去重。
 
 ## 验证
 
-`python -m unittest discover -s tests` 覆盖 107 项测试：30 条固定案例、跨轮恢复、错误标识后调整、工单去重、用户隔离与敏感信息脱敏，以及证据冲突、关联请求排除、工具记录/用户消息中的提示注入和任务心跳修复。实测结果见 [evaluation_report.md](evaluation_report.md)；模型在线演示需要有效的模型 API Key。
+`python -m unittest discover -s tests` 覆盖 258 项测试（另有 211 个 subtest）：30 条固定案例、跨轮恢复、错误标识后调整、工单去重、用户隔离与敏感信息脱敏，证据冲突、关联请求排除、工具记录/用户消息中的提示注入和任务心跳修复，以及 2026-10-22（P7）新增的流式与同步共用配额、429 无副作用、`enforce_limit` 不可经查询参数触达与瞬时 Redis TTL 统一配置用例。实测结果见 [evaluation_report.md](evaluation_report.md)；模型在线演示需要有效的模型 API Key。
 
 登录取得短期 token 后，写入当前进程环境变量 `DEVTRACE_EVAL_TOKEN`，再运行 HTTP 判定器；不要把 token 写入仓库或命令历史：
 
