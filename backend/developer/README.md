@@ -43,7 +43,7 @@
 
 ## 验证
 
-`python -m pytest -q tests` 覆盖 304 项测试（另有 211 个 subtest）：30 条固定案例、跨轮恢复、错误标识后调整、工单去重、用户隔离与敏感信息脱敏，证据冲突、关联请求排除、工具记录/用户消息中的提示注入和任务心跳修复，2026-10-22（P7）新增的流式与同步共用配额、429 无副作用、`enforce_limit` 不可经查询参数触达与瞬时 Redis TTL 统一配置用例，同日（P9）新增的 holdout 工具名 base 归一化用例（`mcp_` 前缀只在命中本地注册表时才剥离、`assess()` 默认口径不变、离线重算不改存盘官方报告），以及同日（P10）新增的限流 fail-open/登录 `Retry-After` 用例与情景记忆保留 CLI 用例（dry-run 默认、`--apply` 才删、无 `ts` 不删、画像集合拒绝、Chroma 故障非零退出）。实测结果见 [evaluation_report.md](evaluation_report.md)；模型在线演示需要有效的模型 API Key。
+`python -m pytest -q tests` 覆盖 304 项测试（另有 211 个 subtest；Windows 本机需 `PYTHONUTF8=1`，否则 MCP stdio 那条用例会因子进程按 GBK 输出中文工具描述而稳定解码失败，Linux/CI 不受影响）：30 条固定案例、跨轮恢复、错误标识后调整、工单去重、用户隔离与敏感信息脱敏，证据冲突、关联请求排除、工具记录/用户消息中的提示注入和任务心跳修复，2026-10-22（P7）新增的流式与同步共用配额、429 无副作用、`enforce_limit` 不可经查询参数触达与瞬时 Redis TTL 统一配置用例，同日（P9）新增的 holdout 工具名 base 归一化用例（`mcp_` 前缀只在命中本地注册表时才剥离、`assess()` 默认口径不变、离线重算不改存盘官方报告），以及同日（P10）新增的限流 fail-open/登录 `Retry-After` 用例与情景记忆保留 CLI 用例（dry-run 默认、`--apply` 才删、无 `ts` 不删、画像集合拒绝、Chroma 故障非零退出）。实测结果见 [evaluation_report.md](evaluation_report.md)；模型在线演示需要有效的模型 API Key。
 
 登录取得短期 token 后，写入当前进程环境变量 `DEVTRACE_EVAL_TOKEN`，再运行 HTTP 判定器；不要把 token 写入仓库或命令历史：
 

@@ -455,7 +455,7 @@ Agent 新增 `search_public_docs` 工具与 `public_api` 计划路径；模型�
 
 ### 3. 验证
 
-- 回归：整表 **304 项通过 + 211 个 subtest**（278 + P10 新增 26 项：`tests/test_rate_limit_degradation.py` 10 项、`tests/test_memory_retention.py` 16 项），51.90 秒，旧用例无一改动、无一失败；CI Ruff `--select F` 清单 55 → **58 个文件**（`developer/memory_retention.py` 与两个新测试文件），本地按 CI 同参数整表 `All checks passed!`。
+- 回归：整表 **304 项通过 + 211 个 subtest**（278 + P10 新增 26 项：`tests/test_rate_limit_degradation.py` 10 项、`tests/test_memory_retention.py` 16 项），51.90 秒，旧用例无一改动、无一失败；计数为 `PYTHONUTF8=1` 口径（见"未验证"第 7 条的 Windows 编码依赖）；CI Ruff `--select F` 清单 55 → **58 个文件**（`developer/memory_retention.py` 与两个新测试文件），本地按 CI 同参数整表 `All checks passed!`。
 - 规则模式 holdout 作为回归重跑：**40/40**（conflict 3/3、auth 5/5、quota 3/3、ambiguity 3/3、webhook 4/4、combo 5/5、injection 7/7、anomaly 3/3、negative 2/2、multiturn 3/3、public_api 2/2）、退出码 0，输出写到工作区根目录 `.p10_rules.json`，**仓库内官方报告未被覆盖**；零模型调用。
 - Docker（隔离栈 `devtrace-verify`，API 18002，`--no-build` 复用镜像 + `devtrace-compose.bind.yml` 把仓库源码只读挂载进容器 + `devtrace-compose.rules.yml` 强制 rules 模式，容器与 worker 的 `DEVELOPER_MODEL_MODE` 都 `printenv` 确认为 `rules`；`backend/.env` 全程未读未改；收尾 `down` 未加 `-v`）：
   - **登录 429 带 `Retry-After`**：12 次连续登录请求 → `10×401 + 2×429`，两个 429 的 `Retry-After` 取值集合恰为 `["60"]`。这轮用的是故意写错的口令（工作区口令文件与该栈现有用户口令不匹配，见"未验证"第 1 条），但登录限流在口令校验之前按 IP 计数，401 同样消耗配额，所以"窗口 10 次 + 第 11 次起 429 带 header"这条结论成立；200 成功的登录路径由 ASGI 用例覆盖。
@@ -473,6 +473,7 @@ Agent 新增 `search_public_docs` 工具与 `public_api` 计划路径；模型�
 4. **保留 CLI 的规模上限**：`fetch_all` 一次性把整个 episodic 集合读进内存（`get(include=['metadatas'])`），演示级数据量没问题，真实大集合需要分页/流式扫描——列为 P11。Chroma 侧只测了服务地址不可达 → 嵌入式回退与真实服务两条路径，未测并发删除、未测 `ts` 为其他格式的历史脏数据（本轮只按 ISO/epoch 解析，其余一律 skip）。
 5. 本机仍无 Python 3.12，`asyncio.TimeoutError` 在 3.10 与 3.11+ 的类层次不同（3.11 起才是内置 `TimeoutError`），`LIMITER_INFRA_ERRORS` 在 CI 的 3.12 下是否命中同一路径以 CI 全绿交叉验证，未做专项压测。
 6. 审计事件里的 `remote` 是 `unknown`（探针进程无请求上下文），不代表线上取不到 IP；线上路径由 HTTP 中间件设置 contextvar，P1–P5 已验。
-7. 全部为小样本、单 provider、单机演示级验证，**不构成生产就绪结论**。
-8. P11 候选：限流器与 Redis 的健康检查/熔断与恢复压测、按 IP/租户分层配额或网关级限流、`memory_retention` 的分页扫描 + 定时任务（需运维决策）、按 workspace 分区 Chroma 集合、`verify_public_docs.py` 的工具拼写断言、真实 `kill -9` 恢复与多 provider 评测。
+7. **本机整表计数依赖 UTF-8 模式**：同一份代码在本机不带 `PYTHONUTF8=1` 复跑时，`tests/test_mcp_all_tools.py::ServerSurfaceTests::test_stdio_entrypoint_starts_and_answers_tools_list` **连续两次**失败（`UnicodeDecodeError: 0xbc`）——被测的 stdio MCP 子进程在非 UTF-8 模式下用系统 GBK 写出中文工具描述，而测试按 UTF-8 解码 stdout；带 `PYTHONUTF8=1` 则 **304 项全绿**（52.51 秒）。P10 未触碰 `backend/mcp/` 与该测试文件（`git diff d05d605..HEAD --stat -- backend/mcp backend/tests/test_mcp_all_tools.py` 为空），属既有的 Windows 编码耦合，Linux CI 3.12 不受影响、本轮 CI 全绿。**本轮按范围纪律未修**，列 P11（子进程显式 `PYTHONUTF8=1` 或断言改用 `errors='replace'` 前先确认产品输出编码）。本文档报的 304 因此以 `PYTHONUTF8=1` 口径为准。
+8. 全部为小样本、单 provider、单机演示级验证，**不构成生产就绪结论**。
+9. P11 候选：限流器与 Redis 的健康检查/熔断与恢复压测、按 IP/租户分层配额或网关级限流、`memory_retention` 的分页扫描 + 定时任务（需运维决策）、按 workspace 分区 Chroma 集合、`verify_public_docs.py` 的工具拼写断言、MCP stdio 测试的跨平台编码依赖、真实 `kill -9` 恢复与多 provider 评测。
 
