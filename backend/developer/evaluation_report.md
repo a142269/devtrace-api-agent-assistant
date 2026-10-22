@@ -470,10 +470,55 @@ Agent 新增 `search_public_docs` 工具与 `public_api` 计划路径；模型�
 1. **登录成功（200）路径未在容器里复测**：工作区 `.devtrace-demo-credential` 与该栈的用户口令存储已不匹配（401），本轮不打算为取证改 `backend/.env`；200 登录 + fail-open 的组合由 ASGI 用例 `test_login_succeeds_when_limiter_redis_is_down` 覆盖，容器只证明了"Redis 挂掉时登录不会 500、且限流器照常降级"。
 2. **fail-open 不等于全链路可用**：Redis 完全不可用时 `/developer/chat` 仍 500（会话锁、任务记录都依赖 Redis）。本轮按卡片范围只降级限流器，没有改锁/队列语义。
 3. **降级窗口内的滥用风险**：fail-open 期间配额不生效，突发流量可直达模型。演示级取舍，生产需网关/多副本限流；本轮未做限流器与 Redis 断连的自动恢复压测（只做了 stop/start 一轮）。
-4. **保留 CLI 的规模上限**：`fetch_all` 一次性把整个 episodic 集合读进内存（`get(include=['metadatas'])`），演示级数据量没问题，真实大集合需要分页/流式扫描——列为 P11。Chroma 侧只测了服务地址不可达 → 嵌入式回退与真实服务两条路径，未测并发删除、未测 `ts` 为其他格式的历史脏数据（本轮只按 ISO/epoch 解析，其余一律 skip）。
+4. **保留 CLI 的规模上限**：`fetch_all` 一次性把整个 episodic 集合读进内存（`get(include=['metadatas'])`），演示级数据量没问题，真实大集合需要分页/流式扫描——列为 P11（**P11 已实现 `--page-size` 分页扫描，`fetch_all` 退化为"客户端不支持 limit/offset 时的兜底一次全量读取"**）。Chroma 侧只测了服务地址不可达 → 嵌入式回退与真实服务两条路径，未测并发删除、未测 `ts` 为其他格式的历史脏数据（本轮只按 ISO/epoch 解析，其余一律 skip）。
 5. 本机仍无 Python 3.12，`asyncio.TimeoutError` 在 3.10 与 3.11+ 的类层次不同（3.11 起才是内置 `TimeoutError`），`LIMITER_INFRA_ERRORS` 在 CI 的 3.12 下是否命中同一路径以 CI 全绿交叉验证，未做专项压测。
 6. 审计事件里的 `remote` 是 `unknown`（探针进程无请求上下文），不代表线上取不到 IP；线上路径由 HTTP 中间件设置 contextvar，P1–P5 已验。
-7. **本机整表计数依赖 UTF-8 模式**：同一份代码在本机不带 `PYTHONUTF8=1` 复跑时，`tests/test_mcp_all_tools.py::ServerSurfaceTests::test_stdio_entrypoint_starts_and_answers_tools_list` **连续两次**失败（`UnicodeDecodeError: 0xbc`）——被测的 stdio MCP 子进程在非 UTF-8 模式下用系统 GBK 写出中文工具描述，而测试按 UTF-8 解码 stdout；带 `PYTHONUTF8=1` 则 **304 项全绿**（52.51 秒）。P10 未触碰 `backend/mcp/` 与该测试文件（`git diff d05d605..HEAD --stat -- backend/mcp backend/tests/test_mcp_all_tools.py` 为空），属既有的 Windows 编码耦合，Linux CI 3.12 不受影响、本轮 CI 全绿。**本轮按范围纪律未修**，列 P11（子进程显式 `PYTHONUTF8=1` 或断言改用 `errors='replace'` 前先确认产品输出编码）。本文档报的 304 因此以 `PYTHONUTF8=1` 口径为准。
+7. **本机整表计数依赖 UTF-8 模式**：同一份代码在本机不带 `PYTHONUTF8=1` 复跑时，`tests/test_mcp_all_tools.py::ServerSurfaceTests::test_stdio_entrypoint_starts_and_answers_tools_list` **连续两次**失败（`UnicodeDecodeError: 0xbc`）——被测的 stdio MCP 子进程在非 UTF-8 模式下用系统 GBK 写出中文工具描述，而测试按 UTF-8 解码 stdout；带 `PYTHONUTF8=1` 则 **304 项全绿**（52.51 秒）。P10 未触碰 `backend/mcp/` 与该测试文件（`git diff d05d605..HEAD --stat -- backend/mcp backend/tests/test_mcp_all_tools.py` 为空），属既有的 Windows 编码耦合，Linux CI 3.12 不受影响、本轮 CI 全绿。**本轮按范围纪律未修**，列 P11（子进程显式 `PYTHONUTF8=1` 或断言改用 `errors='replace'` 前先确认产品输出编码）。本文档报的 304 因此以 `PYTHONUTF8=1` 口径为准。**（P11 已修：`mcp/server.py` 的 stdio 入口显式 `reconfigure(encoding='utf-8')`、`mcp/client.py` 的 `StdioTransport` 强制子进程 `PYTHONUTF8=1`；本机不带 `PYTHONUTF8=1` 整表 325 项全绿。本节原文按记录纪律保留。）**
 8. 全部为小样本、单 provider、单机演示级验证，**不构成生产就绪结论**。
 9. P11 候选：限流器与 Redis 的健康检查/熔断与恢复压测、按 IP/租户分层配额或网关级限流、`memory_retention` 的分页扫描 + 定时任务（需运维决策）、按 workspace 分区 Chroma 集合、`verify_public_docs.py` 的工具拼写断言、MCP stdio 测试的跨平台编码依赖、真实 `kill -9` 恢复与多 provider 评测。
+
+## MCP stdio 编码与保留 CLI 分页（2026-10-22，P11）
+
+基线 `255bdcf`（P10 已验收）。只做卡片里的两件低风险工程修复：MCP stdio 显式 UTF-8（产品侧 + 客户端侧），以及情景记忆保留 CLI 的分页扫描。**零模型调用、零付费 HTTP**；官方 40 条 holdout 的案例、标签、断言、评分逻辑与两份已发布报告全部零改动（`git diff 255bdcf -- backend/developer/eval_holdout_model_2026-10-22_full40.json backend/developer/eval_holdout_model_2026-10-22_full40_base_names.json backend/tests/test_holdout_cases.py backend/developer/evaluate_holdout.py backend/developer/evaluate_diagnosis.py` 为空）。
+
+### 1. MCP stdio 强制 UTF-8（`mcp/server.py` + `mcp/client.py`）
+
+- **产品侧**：`_stdio_loop()` 第一件事就是 `force_utf8_stdio(sys.stdin, sys.stdout)`——对每个流调 `reconfigure(encoding='utf-8')`，**不能 reconfigure 的流（没有该属性的替身、已关闭的流）跳过而不是报错**，并把成功切换的流名记入返回值供测试断言。写入仍是原来的文本模式 `json.dumps(response, ensure_ascii=False) + "\n"`，协议字段与顺序、`tools/list` 的 8 个只读工具、`initialize` 的 `protocolVersion: 2024-11-05` 一字未改；线格式仍是"每行一个 JSON 对象"的 NDJSON。
+- **客户端侧**：`StdioTransport._child_env()` 返回 `{**os.environ, 'PYTHONUTF8': '1'}` 并传给 `create_subprocess_exec(env=...)`。**这是有意覆盖**继承来的 `PYTHONUTF8=0`：stdio 通道的两端必须说同一种编码，否则中文工具描述会解码失败；`PATH` 等其余环境变量原样透传，30 秒超时、`stdout.decode('utf-8')` 与 `stderr=DEVNULL` 均未改。
+- **为什么必须两边都改**：Windows 上被重定向的 `sys.stdout` 默认用系统区域编码（本机 GBK/cp936），而 `python -X utf8` 只作用于被启动的那个解释器、**不会被子进程继承**，所以 P10 那条 `UnicodeDecodeError: 0xbc` 的既有失败在 Linux CI 上看不见、在 Windows 上稳定复现。现在服务端自己声明 UTF-8，客户端再保证子进程以 UTF-8 模式启动，两端都不依赖调用方的环境变量。
+- 文档口径统一写成"**UTF-8 换行分隔 JSON**"（`mcp/server.py` 模块 docstring、`StdioTransport` docstring）；P10 评测报告"未验证"第 4/7 条原文保留并就地标注"已在 P11 修复"。
+
+### 2. 保留 CLI 分页扫描（`developer/memory_retention.py`）
+
+- 新增 `--page-size`（`type=parse_page_size`，默认 **500**，范围 **1..5000**，越界或非整数 → argparse 退出码 **2**，且在任何 Chroma 读取之前失败）。`run_retention()` 内部也复检同一区间（直接调用 API 时给 `RetentionError`）。
+- 读取拆成 `fetch_page(collection, limit=, offset=)` + `iter_pages()` 生成器：`collection.get(limit=..., offset=..., include=['metadatas'])` 每次只取一页，逐页 `classify()` 后**只累计计数与候选 id**，整集合不再一次性进内存（P10 的 `fetch_all` 保留，退化为"客户端不接受 `limit`/`offset` 时的兜底一次全量读取"）。
+- 终止条件三条：最后一页短于 `page_size` → 停；空页 → 停；**同一批 id 连续出现两次**（客户端接受参数但忽略 `offset`）→ 停，不会死循环。候选 id 用 `seen_candidates` 去重，因此任何分页异常都不会让同一条记录被删两次；`skipped_no_ts`/`conversations` 同样去重后累计，`by_user` 只对首次出现的候选 id 计数。
+- **删除仍在整页扫完之后**才发生（`delete_ids` 沿用 `DELETE_BATCH_SIZE = 200`），所以读取期间偏移量不会因删除而漂移；中途失败照旧抛"已删除 x/y"并以退出码 1 结束。
+- 报告新增 `pages` / `page_size` 两个字段，文本输出多一行"分 N 页读取，每页 M 条"；`--days/--user/--collection/--dry-run/--apply` 的语义、画像集合拒绝、无 `ts` 跳过、幂等性全部未改。
+
+### 3. 验证
+
+- 回归两个口径**都是 325 项通过 + 211 个 subtest**：不带 `PYTHONUTF8=1`（Windows 本机 Python 3.10.18）**325 passed / 51.28s**，带 `PYTHONUTF8=1` **325 passed / 56.45s**——P10 报的"计数依赖 UTF-8 模式"这条限制本轮消除。304 → 325 是新增 21 项：`tests/test_mcp_stdio_encoding.py` **8 项**、`tests/test_memory_retention.py` 16 → **29 项**；旧用例无一改动、无一失败。
+- **编码修复有负向对照**：`LocaleCodecControlTests` 在同一次测试里起一个**故意不 reconfigure** 的子进程，Windows 上断言它的 stdout 能按 GBK 解码、按 UTF-8 解码必抛 `UnicodeDecodeError`——证明"测试通过"不是因为宿主默认编码本来就是 UTF-8。另外手工把 `force_utf8_stdio()` 调用摘掉复跑，P10 那条 `UnicodeDecodeError: 0xbc` 立刻回来（2 项失败），恢复后 34 项全绿。
+- 真实 Chroma 分页取证（隔离栈 `devtrace-verify`，Chroma 服务 0.5.23，`devtrace-compose.bind.yml` 把仓库源码只读挂载进容器，容器内 Python 3.12.15；`backend/.env` 全程未读未改；收尾 `down` 未加 `-v`）：一次性集合 `p11_probe_episodic` 灌 **1200 条**（600 条 45 天前、500 条 1 天/1 分钟内、100 条故意不带 `ts`）。
+  - `--page-size 500` dry-run：`pages=3`、`scanned=1200`、`candidates=600`、`kept_fresh=500`、`skipped_no_ts=100`、`deleted=0`、`by_user {"alice":200,"bob":400}`、涉及会话 17 个；
+  - **分页不改变判定**：同一集合 `--page-size 100`（`pages=12`）与 `--page-size 5000`（`pages=1`）的 `scanned/candidates/kept_fresh/skipped_no_ts/by_user` 与 `--page-size 500` **完全一致**；
+  - `--page-size 500 --apply`：`pages=3`、`deleted=600`、`remaining_candidates=0`（按 200 一批共 3 次 `delete`）；随后再 dry-run：`pages=2`、`scanned=600`、`candidates=0`、`deleted=0`（幂等）；
+  - `--page-size 100 --apply --collection p11_probe_profile`：退出码 **1** + 拒绝原因，集合列表里从未出现该名字；
+  - 全程真实集合未动：`developer_episodic` 3 条、`developer_profile` 3 条、`developer_knowledge` 6 条；取证完 `delete_collection('p11_probe_episodic')` 已清理。
+- 单元层的分页边界（`RetentionPagingTests` 10 项 + `CliTests` 4 项新增）：3 页 dry-run 统计与 `get(limit, offset)` 调用序列 `[(3,0),(3,3),(3,6)]`、跨页 apply 只删过期行、`batch_size=2` 时的删除批次 `[["r-0","r-2"],["r-5"]]`、空集合与短尾页不死循环、**不接受 `limit`/`offset` 的客户端**退化为一次全量读取（`pages=1`、结果不变）、**忽略 `offset` 的客户端**只读两次就停且不重复删、二次 apply 幂等、`--user` 按页过滤、`page_size` 越界（0/-1/5001）在读之前失败且 CLI 退出码 2、分页请求画像集合仍被拒绝且 `get_calls=0`、文本输出带页信息。
+- 规则模式 holdout 作为回归重跑：**40/40**（conflict 3/3、auth 5/5、quota 3/3、ambiguity 3/3、webhook 4/4、combo 5/5、injection 7/7、anomaly 3/3、negative 2/2、multiturn 3/3、public_api 2/2；`by_decision_mode` 只有 `rules`、`by_batch` 19+21），退出码 0，输出写到工作区根目录 `.p11_rules.json`，**仓库内官方报告未被覆盖**；零模型调用。
+- CI Ruff `--select F` 清单 58 → **59 个文件**（新增 `tests/test_mcp_stdio_encoding.py`；`mcp/server.py`、`mcp/client.py`、`developer/memory_retention.py`、`tests/test_memory_retention.py` 本就在清单里），本地按 CI 同参数 `All checks passed!`。
+- 范围证据：`git diff --name-only 255bdcf` 只有 8 个已跟踪文件（`.github/workflows/ci.yml`、`README.md`、`backend/developer/README.md`、`backend/developer/evaluation_report.md`、`backend/developer/memory_retention.py`、`backend/mcp/client.py`、`backend/mcp/server.py`、`backend/tests/test_memory_retention.py`）+ 新增 `backend/tests/test_mcp_stdio_encoding.py`；`backend/api`、`backend/memory`、`backend/developer/prompts.py`、`assistant.py`、`planner.py`、`task_queue.py`、`frontend` 的 diff 为空。
+
+### 4. 未验证 / 风险
+
+1. **真实 Chroma 上的分页顺序假设**：本轮实测 0.5.23 的 `get(limit, offset)` 按 id 顺序返回、三次分页无重叠无遗漏（1200 → 3×500，删除后 600 → 2 页）。Chroma 未把"分页期间顺序稳定"写成契约，并发写入时理论上可能漏读或重读某条记录；漏读的后果是"这轮少删一条"（下一轮 dry-run 会再报出来），重读的后果被候选 id 去重挡住，都不会误删较新记录，但**未做并发写入下的分页压测**。
+2. **真实 Chroma 上未验删除中途失败**：`已删除 x/y` 的非零退出路径只有单元测试（`fail_delete` 替身 + `batch_size` 分批断言）覆盖，没在真实 Chroma 上人为制造批次失败；理由是造这种故障需要注入或删除中途 kill 容器，超出本轮范围。
+3. **stdio 编码只在本机（Windows/GBK）与 Linux CI 两个环境验证**：macOS 与非 GBK 的 Windows 区域设置未测；`force_utf8_stdio` 对"无法 reconfigure 的流"只跳过不报错，若某平台的 `sys.stdout` 既没有 `reconfigure` 又默认非 UTF-8，中文描述仍会解码失败——这一分支由 `StdioLoopStreamSwapTests` 用替身流覆盖，属实现级验证而非平台级。
+4. **`PYTHONUTF8=1` 的有意覆盖**：调用方若刻意设 `PYTHONUTF8=0`（例如想强制 ASCII 输出以便日志落盘），`StdioTransport` 会覆盖它。这是"两端必须同编码"的取舍，已在 `client.py` docstring 写明，但没有提供关闭开关。
+5. `--page-size` 上限 5000 是拍脑袋的演示级上限（单页 5000 条 metadata 的量级），没有按真实 Chroma 的响应体大小做压测；下限 1 只用于拒绝 0/负数，没有测过 1 的极端分页在真实服务上的耗时。
+6. 本机仍无 Python 3.12，`reconfigure()` 在 3.10 与 3.12 的行为差异只以"本机 3.10 全绿 + CI 3.12 全绿"交叉验证，未做专项对照。
+7. 全部为小样本、单 provider、单机演示级验证，**不构成生产就绪结论**。
+8. P12 候选：限流器与 Redis 的健康检查/熔断与恢复压测、按 IP/租户分层配额或网关级限流、保留 CLI 的定时任务与"删除窗口内并发写入"的一致性设计、按 workspace 分区 Chroma 集合、`verify_public_docs.py` 的工具拼写断言、MCP stdio 的 Windows 区域设置矩阵与真实 `kill -9` 恢复、多 provider 评测。
 

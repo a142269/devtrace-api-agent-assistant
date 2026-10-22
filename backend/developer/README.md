@@ -43,7 +43,7 @@
 
 ## 验证
 
-`python -m pytest -q tests` 覆盖 304 项测试（另有 211 个 subtest；Windows 本机需 `PYTHONUTF8=1`，否则 MCP stdio 那条用例会因子进程按 GBK 输出中文工具描述而稳定解码失败，Linux/CI 不受影响）：30 条固定案例、跨轮恢复、错误标识后调整、工单去重、用户隔离与敏感信息脱敏，证据冲突、关联请求排除、工具记录/用户消息中的提示注入和任务心跳修复，2026-10-22（P7）新增的流式与同步共用配额、429 无副作用、`enforce_limit` 不可经查询参数触达与瞬时 Redis TTL 统一配置用例，同日（P9）新增的 holdout 工具名 base 归一化用例（`mcp_` 前缀只在命中本地注册表时才剥离、`assess()` 默认口径不变、离线重算不改存盘官方报告），以及同日（P10）新增的限流 fail-open/登录 `Retry-After` 用例与情景记忆保留 CLI 用例（dry-run 默认、`--apply` 才删、无 `ts` 不删、画像集合拒绝、Chroma 故障非零退出）。实测结果见 [evaluation_report.md](evaluation_report.md)；模型在线演示需要有效的模型 API Key。
+`python -m pytest -q tests` 覆盖 325 项测试（另有 211 个 subtest；2026-10-22 P11 起 Windows 本机**不再需要** `PYTHONUTF8=1`——MCP stdio 的服务端与客户端都已强制 UTF-8，此前那条会因 GBK 子进程输出稳定解码失败的用例已修）：30 条固定案例、跨轮恢复、错误标识后调整、工单去重、用户隔离与敏感信息脱敏，证据冲突、关联请求排除、工具记录/用户消息中的提示注入和任务心跳修复，2026-10-22（P7）新增的流式与同步共用配额、429 无副作用、`enforce_limit` 不可经查询参数触达与瞬时 Redis TTL 统一配置用例，同日（P9）新增的 holdout 工具名 base 归一化用例（`mcp_` 前缀只在命中本地注册表时才剥离、`assess()` 默认口径不变、离线重算不改存盘官方报告），以及同日（P10）新增的限流 fail-open/登录 `Retry-After` 用例与情景记忆保留 CLI 用例（dry-run 默认、`--apply` 才删、无 `ts` 不删、画像集合拒绝、Chroma 故障非零退出）。实测结果见 [evaluation_report.md](evaluation_report.md)；模型在线演示需要有效的模型 API Key。
 
 登录取得短期 token 后，写入当前进程环境变量 `DEVTRACE_EVAL_TOKEN`，再运行 HTTP 判定器；不要把 token 写入仓库或命令历史：
 
@@ -78,7 +78,7 @@ python -m developer.evaluate_memory --output developer/eval_memory.json
 
 持久任务队列：设置 `DEVTRACE_TASK_QUEUE=enabled` 后，流式诊断由 Redis 队列 + `python -m api.worker` 独立执行；失败重试一次、耗尽进死信、worker 重启回收中断任务。Compose 已包含 `worker` 服务；同步接口保持进程内。队列/worker 用例见 `tests/test_task_queue.py`。
 
-情景记忆保留策略：`python -m developer.memory_retention --days 90` 读取 Chroma episodic 集合，按 metadata `ts` 找出早于保留窗口的记录。**默认 `--dry-run`**，只输出候选数量、按用户分布、涉及会话与"无可用 `ts` 的跳过数"，一条都不删；`--apply` 才真正删除（与 `--dry-run` 互斥），`--user <name>` 只能进一步缩小范围。三条硬边界：`ts` 缺失或不可解析的记录**不猜年龄、不删除**（记入 `skipped_no_ts`）；含 `profile` 的集合名直接拒绝执行——用户画像仍然只能通过 `DELETE /developer/profile` 显式删除；Redis 工作记忆与摘要继续由 `DEVTRACE_MEMORY_TTL_SECONDS` 过期，不归本工具管。`--days` 必须 ≥1，Chroma 连不上或读写失败会打印原因并以非零码退出，不会静默报成功。集合名与连接沿用服务的配置（`CHROMA_HOST`/`CHROMA_PORT`/`CHROMA_PERSIST_DIRECTORY`，默认集合 `developer_episodic`），Chroma 仍是演示级单实例、无按 workspace 分区。
+情景记忆保留策略：`python -m developer.memory_retention --days 90` 读取 Chroma episodic 集合，按 metadata `ts` 找出早于保留窗口的记录。**默认 `--dry-run`**，只输出候选数量、按用户分布、涉及会话与"无可用 `ts` 的跳过数"，一条都不删；`--apply` 才真正删除（与 `--dry-run` 互斥），`--user <name>` 只能进一步缩小范围。三条硬边界：`ts` 缺失或不可解析的记录**不猜年龄、不删除**（记入 `skipped_no_ts`）；含 `profile` 的集合名直接拒绝执行——用户画像仍然只能通过 `DELETE /developer/profile` 显式删除；Redis 工作记忆与摘要继续由 `DEVTRACE_MEMORY_TTL_SECONDS` 过期，不归本工具管。`--days` 必须 ≥1，`--page-size`（P11 新增，默认 500、范围 1..5000，越界或非整数以退出码 2 失败且不触碰 Chroma）决定每页读取多少条：扫描按 `limit`/`offset` 逐页进行、报告带 `pages`/`page_size`，整集合不再一次性进内存，而**分页不改变任何判定**（真实 Chroma 实测 `--page-size 100/500/5000` 的扫描数、候选数、较新保留数与跳过数完全一致）；不支持或忽略分页参数的客户端退化为一次全量读取，不会死循环，候选 id 去重也保证同一条记录不会被删两次。Chroma 连不上或读写失败会打印原因并以非零码退出，不会静默报成功。集合名与连接沿用服务的配置（`CHROMA_HOST`/`CHROMA_PORT`/`CHROMA_PERSIST_DIRECTORY`，默认集合 `developer_episodic`），Chroma 仍是演示级单实例、无按 workspace 分区。
 
 原生 tool calling：`AnthropicDecisionModel.choose_action` 优先把 ready steps 的 JSON Schema 作为 Anthropic `tools` 传给模型（`tool_choice=auto`），校验 `tool_use` 参数后执行；不支持的 provider 自动回退 JSON/规则，指标 `native_tool_calls` 可观察。
 
