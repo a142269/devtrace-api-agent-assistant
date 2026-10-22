@@ -31,12 +31,12 @@
 
 响应包含 `conversation_id`、`run_id`、`answer`、`plan`、`actions`、`timeline`、`evidence`、`diagnosis`、`security`、`memory_used`、`metrics`、可选 `ticket_id` 和 `decision_mode`。`decision_mode` 区分 `model`、`rules` 和 `rules_fallback`。`diagnosis` 除 `hypotheses`（含 `code`、`description`、`status`、`confidence`、`evidence`、`contradicted_by`、`next_evidence`、`remediation`）外，还有整体 `status`（`evidence_available` / `conflicting_evidence` / `insufficient_evidence`）、`summary`、`conflicts` 和 `linkages`。`security` 给出 `injection_suspected`、`flags`、`tainted_sources` 与 `policy`；`actions[].tainted` 标记来自不可信记录的观察。等待补充时可用同一 `conversation_id` 继续。`GET /developer/runs` 和 `GET /developer/runs/{run_id}` 根据认证身份授权；客户端不能指定 `user_id`。
 
-流式接口的 `started` 事件提供独立的 `task_id`；`GET /developer/tasks/{task_id}` 可查询该用户的状态。断开连接时记录 `cancelled`，同会话可从最近检查点继续。任务记录带心跳时间：SSE 事件与 15 秒空闲心跳都会刷新 `updated_at`，`running` 超过 240 秒未更新会在查询时改为 `interrupted`，进程启动时也会把上一进程残留的 `running` 一并修正（仅适用于单进程/单副本共享 Redis）。同步与流式入口共用同一把 30 次/60 秒的用户级限流（2026-10-22 P7 起），流式超限在建立连接或入队之前返回 HTTP 429 + `Retry-After: 60`，不会创建任务记录、入队或写 `started`；连接建立后不再中途限流。`DEVTRACE_TASK_QUEUE=enabled` 时由持久队列执行（Compose 默认），进程内模式不会自动重跑中断任务，中断后需在同一会话发送“继续”。
+流式接口的 `started` 事件提供独立的 `task_id`；`GET /developer/tasks/{task_id}` 可查询该用户的状态。断开连接时记录 `cancelled`，同会话可从最近检查点继续。任务记录带心跳时间：SSE 事件与 15 秒空闲心跳都会刷新 `updated_at`，`running` 超过 240 秒未更新会在查询时改为 `interrupted`，进程启动时也会把上一进程残留的 `running` 一并修正（仅适用于单进程/单副本共享 Redis）。同步与流式入口共用同一把 30 次/60 秒的用户级限流（2026-10-22 P7 起），流式超限在建立连接或入队之前返回 HTTP 429 + `Retry-After: 60`，不会创建任务记录、入队或写 `started`；连接建立后不再中途限流。该语义在 P7（rules 模式）与 P8（真实 provider 模式）各复验一轮，P8 同时测过前端 429 提示的实际渲染。`DEVTRACE_TASK_QUEUE=enabled` 时由持久队列执行（Compose 默认），进程内模式不会自动重跑中断任务，中断后需在同一会话发送“继续”。
 
 ## 设计边界
 
 - 计划生成和下一行动选择可由模型决定；服务端限制工具白名单、从用户或查询结果获取标识符，并控制单轮最多 5 次行动与 1 次计划调整。
-- 模型提出的合法工具顺序会影响批准计划；服务端补齐必需证据、修正依赖，并只允许从当前可执行步骤中选择行动。`plan.proposed_tools`、`approved_tools` 和 `adjustments` 可用于对照审查。最终答复由成功的工具观察整理生成。开发者工具是项目内注册与调用，并未提供独立 MCP 协议服务。
+- 模型提出的合法工具顺序会影响批准计划；服务端补齐必需证据、修正依赖，并只允许从当前可执行步骤中选择行动。`plan.proposed_tools`、`approved_tools` 和 `adjustments` 可用于对照审查。最终答复由成功的工具观察整理生成。开发者工具默认在项目内注册与调用；另有一个独立的 MCP 协议服务（`mcp/server.py` 的 JSON-RPC 2.0 + stdio 入口），需显式开关才接管部分路径，见下文"MCP 协议"一节。
 - Redis 计划状态和运行记录的有效期由 `DEVTRACE_REDIS_TTL_SECONDS` 统一配置（2026-10-22 P7 起，默认 86400 秒即 24 小时、下限 60 秒）；开发者记忆使用独立键前缀、`developer_episodic` 和 `developer_profile` collection；文档位于独立的 `developer_knowledge` collection。工作记忆与摘要的过期由另一个开关 `DEVTRACE_MEMORY_TTL_SECONDS` 控制，两者互不影响。
 - 回复、界面和工单均说明数据来自本地模拟平台；不接入真实开发者账号、生产日志或工单系统。
 - JWT 仅提供本地演示身份，仍需生产身份服务、TLS、密钥轮换和真实业务权限。请求幂等结果在完成后缓存；进程在副作用与结果缓存之间崩溃时并不保证通用操作恰好一次。模拟工单自身另有去重。
@@ -88,7 +88,7 @@ MCP 协议：`mcp/server.py` 提供 JSON-RPC 2.0 的 `initialize/tools/list/tool
 
 候选计划评分：`python -m developer.evaluate_planning_candidates` 检查 approved/evidence_first/minimal 三候选打分与选择（2026-10-18 为 11/11）；`DEVTRACE_PLANNING_CANDIDATES=enabled` 时启用，响应 `plan.candidates` 暴露候选与分数。
 
-`evaluate_holdout` 使用 40 条手写标签的独立 holdout 集（`eval_holdout_cases.json` 与专用夹具；`2026-10-18` 批 19 条 + `2026-10-21` 批 21 条），规则模式在进程内运行；模型模式需额外传 `--mode model --base-url <地址>` 并设置 `DEVTRACE_EVAL_TOKEN`，`--batch <批次>` 只跑一个标签批次（未知批次直接报错，不会空跑）。结果按 `batch` 标注并在 `summary.by_batch` 分组。2026-10-21 规则模式整表 40/40（19/19 + 21/21）；为控成本真实模型只跑了新批 21 条，得 **18/21**（2 条因标签按本地工具拼写断言而验证栈开着 `DEVTRACE_MCP_ALL_TOOLS`，1 条未带回指定版本文档证据），3 条失败原样保留在报告里、断言未因结果而修改。样本小、标签由项目作者手写，不等同于第三方隐藏评测。`evaluate_memory_tasks` 用 12 条两轮任务比较同会话恢复与新会话重开（规则模式、stub 工作记忆），衡量跨轮任务成功与重复检索，不代表 ChromaDB 情景记忆或生产延迟。
+`evaluate_holdout` 使用 40 条手写标签的独立 holdout 集（`eval_holdout_cases.json` 与专用夹具；`2026-10-18` 批 19 条 + `2026-10-21` 批 21 条），规则模式在进程内运行；模型模式需额外传 `--mode model --base-url <地址>` 并设置 `DEVTRACE_EVAL_TOKEN`，`--batch <批次>` 只跑一个标签批次（未知批次直接报错，不会空跑）。结果按 `batch` 标注并在 `summary.by_batch` 分组。2026-10-21 规则模式整表 40/40（19/19 + 21/21）；同日模型模式为控成本只跑新批 21 条，得 **18/21**（`eval_holdout_model_2026-10-21_new_batch.json`）。2026-10-22（P8）用真实模型跑满**全量 40 条**，得 **37/40**（原批 **19/19**、新批 **18/21**，`eval_holdout_model_2026-10-22_full40.json`；43 次 HTTP 请求、0 重试、0 基础设施失败、墙钟 487.3 秒、单请求 mean 11321.6ms；provider 未返回 usage，故成本只披露请求数与时间、不估算 token）。3 条失败原样保留、断言未因结果而修改：`h_public_playbook_path`/`h_public_docs_path` 是标签按本地工具拼写断言、而 `DEVTRACE_MCP_PUBLIC_TOOLS=enabled`（base compose 默认）让实际工具带上了 `mcp_` 前缀（本轮 `DEVTRACE_MCP_ALL_TOOLS` 未设置仍原样复现这两条失败，说明触发条件是 base compose 默认的 PUBLIC_TOOLS 而非 ALL_TOOLS；P6 的归因已在评测报告中就地更正，原文按协议保留）；`h_quota_v2_doc_version_boundary` 是模型没带回 v1 版本文档那一条具体证据。样本小、**标签全部由项目作者手写**、模型只有一个 provider，不等同于第三方隐藏评测，也不构成跨 provider 结论。`evaluate_memory_tasks` 用 12 条两轮任务比较同会话恢复与新会话重开（规则模式、stub 工作记忆），衡量跨轮任务成功与重复检索，不代表 ChromaDB 情景记忆或生产延迟。
 
 检索评测需要可用的 ChromaDB 或本地向量模型。规则规划和故障注入使用进程内模拟平台，不能视作模型的泛化评估。
 
