@@ -415,7 +415,7 @@ Agent 新增 `search_public_docs` 工具与 `public_api` 计划路径；模型�
   - `h_quota_v2_doc_version_boundary` 归一化后**仍失败**，reasons 逐字不变（`evidence_missing:doc:v1 / 速率限制`），仍算证据/标签绑定规则模式文档桩问题，保留不掩盖。
   - 3 条多轮案例（`h_multiturn_missing_then_id#2`、`h_multiturn_webhook_identifier_later#2`、`h_multiturn_wrong_id_then_correct#2`）**拒绝重算**，原因写明"合并记录只保留最后一步的工具，离线无法逐步骤归因"；这 3 条官方本来就是 pass，拒绝重算不会给补充分数注水。
   - 补充报告的 `official` 段直接引用 P8 存盘 summary，不重算、不改写；CLI 在 base_names 未全过时同样 `exit 1`，防止这份报告被当成第二套绿灯。
-- 规则模式仍 40/40（未重跑；CI 继续只跑 `--mode rules`）。
+- 规则模式本轮**作为回归重跑过一次**：`--mode rules` 仍 **40/40**（原批 19/19、新批 21/21）、退出码 0，输出写到工作区根目录的临时文件、**未覆盖仓库里的官方规则报告**；CI 继续跑整表规则模式。
 
 ### 2. flake 修复（只改测试，产品代码零改动）
 
