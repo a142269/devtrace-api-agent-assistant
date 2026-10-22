@@ -11,7 +11,8 @@
   - 工作记忆超过阈值时自动压缩（LLM 摘要），防止 context 爆炸
   - 生命周期：Redis 工作记忆/摘要按 DEVTRACE_MEMORY_TTL_SECONDS 过期（默认 24h），
     ChromaDB 情景记忆与用户画像不过期，删除只能显式调用 forget_conversation /
-    forget_profile
+    forget_profile，或对情景记忆单独跑保留策略
+    `python -m developer.memory_retention --days N`（默认 dry-run，画像集合被拒绝）
   - 所有 Embedding 通过 Anthropic API 生成，无本地模型
 """
 import hashlib

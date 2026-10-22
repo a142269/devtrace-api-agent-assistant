@@ -432,4 +432,47 @@ Agent 新增 `search_public_docs` 工具与 `public_api` 计划路径；模型�
 - 压力自证（本机 `.dsh-venv`，Python 3.10）：单跑 **20/20** 通过（用例本体 0.195 秒）；再起 6 个 CPU 忙循环进程压满机器，单跑 **20/20** 通过；用 pytest 单独挑该用例跑 **10/10** 通过。修改前的证据不是"重跑旧版失败"，而是上面探针的 20/20 吞取消 + P8 记录的两次并发失败，如实区分。
 - 回归：整表 **278 项通过 + 211 个 subtest**（258 + P9 新增 20 项归一化用例），92.14 秒，旧用例无一改动、无一失败；CI 的 Ruff `--select F` 清单 54 → **55 个文件**（新增 `tests/test_holdout_normalization.py`），本地按 CI 同参数整表 `All checks passed!`。
 - 未验证 / 边界：本机没有 Python 3.12 可用（`py -3.12` 无安装），"`wait_for` 吞取消"在 3.11+ 是否完全消失**未验证**——新写法不依赖该行为（事件置位才判定，并持续重挂取消），CI 的 3.12 全绿只作为交叉验证而非压测；anyio 电平触发结论来自其语义与 P8 生产路径表现，本轮**没有**在真实 uvicorn 断连场景下重测；`--mode rescore` 只重算工具名这一类原因，标签仍绑定规则模式文档桩（`h_quota_v2_doc_version_boundary` 那条就是例子），没有修。全部为本机演示级验证，**不构成生产就绪结论**。
-- P10 候选（本轮按范围纪律不顺手做）：把 `eval_holdout_cases.json` 里那两条 public_api 标签改成 base 名或同时接受两种拼写（那是**改评分口径**，需要单独卡片与单独基线）；`verify_public_docs.py` 仍断言本地工具拼写，公开路径走 MCP 时 `has_playbook` 恒 false；SSE 生成器里 `wait_for(queue.get(), 15)` 的心跳写法可否换成不受外部取消吞噬的形式（属产品代码，需另做压测）；P7 遗留的被拒请求仍计数、登录 429 仍无 `Retry-After`、Redis 故障时限流降级仍 500、Chroma 保留策略。
+- P10 候选（本轮按范围纪律不顺手做）：把 `eval_holdout_cases.json` 里那两条 public_api 标签改成 base 名或同时接受两种拼写（那是**改评分口径**，需要单独卡片与单独基线）；`verify_public_docs.py` 仍断言本地工具拼写，公开路径走 MCP 时 `has_playbook` 恒 false；SSE 生成器里 `wait_for(queue.get(), 15)` 的心跳写法可否换成不受外部取消吞噬的形式（属产品代码，需另做压测）；P7 遗留的被拒请求仍计数、登录 429 仍无 `Retry-After`、Redis 故障时限流降级仍 500、Chroma 保留策略（**这四项中除"被拒请求仍计数"是有意保留的固定窗口语义外，其余三项已由 P10 处理**：登录 429 补 `Retry-After: 60`、限流器对基础设施异常 fail-open、新增 `developer.memory_retention` 保留 CLI，见下方 P10 一节）。
+
+## 限流降级与情景记忆保留（2026-10-22，P10）
+
+基线 `d05d605`（P9 已验收）。本阶段做两件运维补强：限流路径的 Redis 故障不再放大成 500（fail-open），以及给 Chroma 情景记忆一条显式的保留策略 CLI。零模型调用、零付费 HTTP；官方 40 条 holdout 的案例、标签、断言与评分口径一律未动。
+
+### 1. 限流 fail-open + 登录 `Retry-After`
+
+- 产品改动只在 `api/main.py`：新增 `enforce_limit(kind, key, maximum, retry_after=)` 包住原来的 `limit()`。`limit()` 自身的 INCR/EXPIRE/比较脚本**一字未改**，登录入口从 `limit(..., 10)` 改为 `enforce_limit('login', _login_limit_key(ip), 10, retry_after=60)`，`enforce_chat_limit` 改为经 `enforce_limit('chat', ...)`。
+- 只吞基础设施异常：捕获元组 `LIMITER_INFRA_ERRORS = (RedisError, OSError, asyncio.TimeoutError)`，`HTTPException` 显式先 `raise` 出去——429 是判定结果，不是故障。用例 `test_unexpected_limiter_error_is_not_swallowed` 用 `ValueError` 证明非基础设施异常**照样抛出**，不会被 fail-open 静默放过；`test_quota_breach_is_never_swallowed_by_fail_open` 把审计写入也弄坏之后，超限仍然是 429 + `Retry-After: 60`。
+- 降级可观测：一行 warning（`限流不可用，已 fail-open 放行: kind=chat reason=ConnectionError`）+ 一条 `<kind>.rate_limit_unavailable` 审计事件，`detail` 仍走 `developer/audit.py` 的白名单（只出现 `kind/status/reason_code`），不含消息正文、用户名或 IP；`actor` 故意留空（登录侧的用户名未经认证、chat 侧没必要重复标识）。审计写失败依旧 best-effort，不影响放行。
+- 登录 429 现在带 `Retry-After: 60`，与同步/流式 chat 对齐（`LOGIN_LIMIT_RETRY_AFTER`）。固定窗口"被拒请求同样 `INCR`"的既有语义**没改**：容器实测 31 次尝试后计数为 31，本轮只在文档里把它写清。
+- 30 次/60 秒、10 次/60 秒的阈值与键名全部未变；`enforce_limit` 不暴露为路由参数，P7 那条"查询参数绕过"的防护用例继续通过。
+
+### 2. `python -m developer.memory_retention`（新增，默认 dry-run）
+
+- 参数：`--days`（必填、整数、≥1，否则 argparse 退出码 2）、`--dry-run`（默认）与 `--apply` 互斥、`--user`（只能缩小范围）、`--collection`（默认 `developer_episodic`）、`--json`。
+- 只读 episodic 集合并按 metadata `ts` 判定：ISO 字符串与 epoch 数值都解析，统一转成带时区的时刻比较；**`ts` 缺失或不可解析的记录进 `skipped_no_ts`，绝不删除**（不猜年龄）。恰好等于 cutoff 的记录算"较新"保留。
+- 画像保护是双保险：`guard_collection()` 直接拒绝任何名字含 `profile` 的集合，且实现里根本不会打开画像集合；报告固定带 `profile_collection_touched: false`。Redis 工作记忆/摘要继续归 `DEVTRACE_MEMORY_TTL_SECONDS`，本工具不碰。
+- 失败可读：连接不可用 / `get` 失败 / `delete` 批次失败都打印原因并以退出码 1 结束；`delete_ids` 分批（默认 200）删除，部分失败时报出"已删除 x/y"，不会把失败说成成功。
+
+### 3. 验证
+
+- 回归：整表 **304 项通过 + 211 个 subtest**（278 + P10 新增 26 项：`tests/test_rate_limit_degradation.py` 10 项、`tests/test_memory_retention.py` 16 项），51.90 秒，旧用例无一改动、无一失败；CI Ruff `--select F` 清单 55 → **58 个文件**（`developer/memory_retention.py` 与两个新测试文件），本地按 CI 同参数整表 `All checks passed!`。
+- 规则模式 holdout 作为回归重跑：**40/40**（conflict 3/3、auth 5/5、quota 3/3、ambiguity 3/3、webhook 4/4、combo 5/5、injection 7/7、anomaly 3/3、negative 2/2、multiturn 3/3、public_api 2/2）、退出码 0，输出写到工作区根目录 `.p10_rules.json`，**仓库内官方报告未被覆盖**；零模型调用。
+- Docker（隔离栈 `devtrace-verify`，API 18002，`--no-build` 复用镜像 + `devtrace-compose.bind.yml` 把仓库源码只读挂载进容器 + `devtrace-compose.rules.yml` 强制 rules 模式，容器与 worker 的 `DEVELOPER_MODEL_MODE` 都 `printenv` 确认为 `rules`；`backend/.env` 全程未读未改；收尾 `down` 未加 `-v`）：
+  - **登录 429 带 `Retry-After`**：12 次连续登录请求 → `10×401 + 2×429`，两个 429 的 `Retry-After` 取值集合恰为 `["60"]`。这轮用的是故意写错的口令（工作区口令文件与该栈现有用户口令不匹配，见"未验证"第 1 条），但登录限流在口令校验之前按 IP 计数，401 同样消耗配额，所以"窗口 10 次 + 第 11 次起 429 带 header"这条结论成立；200 成功的登录路径由 ASGI 用例覆盖。
+  - **真实 Redis 上的判定边界**（容器内探针把 `eval` 换成抛 `redis.ConnectionError` 的替身，其余操作委托给真客户端）：`enforce_limit('chat'|'login', ...)` 两种 kind 都无异常逃逸；把 `eval` 换回真实实现后连打 31 次 → **30 次通过 + 1 次 429**，`Retry-After` 头 `{"Retry-After": "60"}`，`counter_after_31_requests = 31`（被拒那次照样计数，固定窗口语义未变），探针用后即删临时 key。
+  - **审计流实证**：`developer:audit` 里检索到 4 条本轮探针写入的 `rate_limit_unavailable` 事件（chat/login 各 2），`detail` 只有 `{"kind","reason_code":"limiter_unavailable","status"}`，`actor` 为空、`remote` 为 `unknown`，不含任何正文。
+  - **HTTP 层降级范围**：容器内用 `issue_token` 现签一个演示用户令牌（令牌与 secret 都不打印）直接打本地 127.0.0.1:8000。Redis 正常：`/developer/chat` **200**；把 `devtrace-verify-redis-1` 停掉：`/auth/login` → **401 而不是 500**（限流器 fail-open，请求走到口令校验），`/developer/chat` → **500**（限流器已放行，但会话锁仍需 Redis）；恢复 Redis 后 chat 再次 **200**。这条把"fail-open 只覆盖限流器、不覆盖整个请求依赖链"的边界实测出来了，如实记录。
+  - **保留 CLI 跑在真实 Chroma 服务上**：先建一次性集合 `p10_retention_demo` 灌 3 条（400 天前的 alice 旧记录、1 小时前的新记录、一条无 `ts`）。`--days 30` dry-run → 扫描 3、候选 1、较新保留 1、`skipped_no_ts` 1、`deleted 0`，集合仍 3 条；`--apply` → `deleted: 1`、`candidate_ids: ["old-alice"]`、`by_user {"alice":1}`、`conversations ["c-old"]`，集合剩 `fresh-alice` + `undated-carol`；再次 `--apply` → `deleted: 0`（幂等）；`--apply --collection developer_profile` → 退出码 **1** 并打印拒绝原因；`--days 0` → 退出码 **2**。全程 `developer_episodic` 仍 3 条、`developer_profile` 仍 3 条未被触碰，演示集合验证完即 drop。
+- 工作区根目录留下（不入库）：`p10_start.py`、`p9_hb.py`（心跳复用）、`p10_login_probe.py`、`p10_redis_probe.py`、`p10_chroma_probe.py`、`p10_chat_probe.py`、`p10_retention_smoke.py`、驱动 `p10_verify.sh`/`p10_verify2.sh`/`p10_verify3.sh` 与报告 `p10_docker_report.json`/`p10_docker_report2.json`/`p10_docker_report3.json`、`.p10_rules.json`。
+
+### 4. 未验证 / 风险
+
+1. **登录成功（200）路径未在容器里复测**：工作区 `.devtrace-demo-credential` 与该栈的用户口令存储已不匹配（401），本轮不打算为取证改 `backend/.env`；200 登录 + fail-open 的组合由 ASGI 用例 `test_login_succeeds_when_limiter_redis_is_down` 覆盖，容器只证明了"Redis 挂掉时登录不会 500、且限流器照常降级"。
+2. **fail-open 不等于全链路可用**：Redis 完全不可用时 `/developer/chat` 仍 500（会话锁、任务记录都依赖 Redis）。本轮按卡片范围只降级限流器，没有改锁/队列语义。
+3. **降级窗口内的滥用风险**：fail-open 期间配额不生效，突发流量可直达模型。演示级取舍，生产需网关/多副本限流；本轮未做限流器与 Redis 断连的自动恢复压测（只做了 stop/start 一轮）。
+4. **保留 CLI 的规模上限**：`fetch_all` 一次性把整个 episodic 集合读进内存（`get(include=['metadatas'])`），演示级数据量没问题，真实大集合需要分页/流式扫描——列为 P11。Chroma 侧只测了服务地址不可达 → 嵌入式回退与真实服务两条路径，未测并发删除、未测 `ts` 为其他格式的历史脏数据（本轮只按 ISO/epoch 解析，其余一律 skip）。
+5. 本机仍无 Python 3.12，`asyncio.TimeoutError` 在 3.10 与 3.11+ 的类层次不同（3.11 起才是内置 `TimeoutError`），`LIMITER_INFRA_ERRORS` 在 CI 的 3.12 下是否命中同一路径以 CI 全绿交叉验证，未做专项压测。
+6. 审计事件里的 `remote` 是 `unknown`（探针进程无请求上下文），不代表线上取不到 IP；线上路径由 HTTP 中间件设置 contextvar，P1–P5 已验。
+7. 全部为小样本、单 provider、单机演示级验证，**不构成生产就绪结论**。
+8. P11 候选：限流器与 Redis 的健康检查/熔断与恢复压测、按 IP/租户分层配额或网关级限流、`memory_retention` 的分页扫描 + 定时任务（需运维决策）、按 workspace 分区 Chroma 集合、`verify_public_docs.py` 的工具拼写断言、真实 `kill -9` 恢复与多 provider 评测。
+

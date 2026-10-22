@@ -31,7 +31,7 @@
 
 响应包含 `conversation_id`、`run_id`、`answer`、`plan`、`actions`、`timeline`、`evidence`、`diagnosis`、`security`、`memory_used`、`metrics`、可选 `ticket_id` 和 `decision_mode`。`decision_mode` 区分 `model`、`rules` 和 `rules_fallback`。`diagnosis` 除 `hypotheses`（含 `code`、`description`、`status`、`confidence`、`evidence`、`contradicted_by`、`next_evidence`、`remediation`）外，还有整体 `status`（`evidence_available` / `conflicting_evidence` / `insufficient_evidence`）、`summary`、`conflicts` 和 `linkages`。`security` 给出 `injection_suspected`、`flags`、`tainted_sources` 与 `policy`；`actions[].tainted` 标记来自不可信记录的观察。等待补充时可用同一 `conversation_id` 继续。`GET /developer/runs` 和 `GET /developer/runs/{run_id}` 根据认证身份授权；客户端不能指定 `user_id`。
 
-流式接口的 `started` 事件提供独立的 `task_id`；`GET /developer/tasks/{task_id}` 可查询该用户的状态。断开连接时记录 `cancelled`，同会话可从最近检查点继续。任务记录带心跳时间：SSE 事件与 15 秒空闲心跳都会刷新 `updated_at`，`running` 超过 240 秒未更新会在查询时改为 `interrupted`，进程启动时也会把上一进程残留的 `running` 一并修正（仅适用于单进程/单副本共享 Redis）。同步与流式入口共用同一把 30 次/60 秒的用户级限流（2026-10-22 P7 起），流式超限在建立连接或入队之前返回 HTTP 429 + `Retry-After: 60`，不会创建任务记录、入队或写 `started`；连接建立后不再中途限流。该语义在 P7（rules 模式）与 P8（真实 provider 模式）各复验一轮，P8 同时测过前端 429 提示的实际渲染。`DEVTRACE_TASK_QUEUE=enabled` 时由持久队列执行（Compose 默认），进程内模式不会自动重跑中断任务，中断后需在同一会话发送“继续”。
+流式接口的 `started` 事件提供独立的 `task_id`；`GET /developer/tasks/{task_id}` 可查询该用户的状态。断开连接时记录 `cancelled`，同会话可从最近检查点继续。任务记录带心跳时间：SSE 事件与 15 秒空闲心跳都会刷新 `updated_at`，`running` 超过 240 秒未更新会在查询时改为 `interrupted`，进程启动时也会把上一进程残留的 `running` 一并修正（仅适用于单进程/单副本共享 Redis）。同步与流式入口共用同一把 30 次/60 秒的用户级限流（2026-10-22 P7 起），流式超限在建立连接或入队之前返回 HTTP 429 + `Retry-After: 60`，不会创建任务记录、入队或写 `started`；连接建立后不再中途限流。该语义在 P7（rules 模式）与 P8（真实 provider 模式）各复验一轮，P8 同时测过前端 429 提示的实际渲染。P10 起限流路径的 Redis/Lua **基础设施故障**改为 fail-open：写一条 warning 日志与 `<kind>.rate_limit_unavailable` 审计事件（`detail` 仍只含白名单字段）后放行请求，不再把 Redis 抖动放大成 500——这是可用性优先的演示级取舍，故障窗口内配额确实不生效，生产应由网关或多副本限流兜底；真正的超限仍然照旧 429，登录侧也从裸 429 补成带 `Retry-After: 60`。固定窗口"被拒请求同样计入 `INCR`"的语义保持不变（31 次尝试 → 计数 31）。fail-open 只覆盖限流器：诊断主流程仍需要 Redis 会话锁，因此 Redis 整体不可用时 chat 请求会在锁获取阶段失败，只有不依赖 Redis 的登录路径表现为"降级不限流"。`DEVTRACE_TASK_QUEUE=enabled` 时由持久队列执行（Compose 默认），进程内模式不会自动重跑中断任务，中断后需在同一会话发送“继续”。
 
 ## 设计边界
 
@@ -43,7 +43,7 @@
 
 ## 验证
 
-`python -m pytest -q tests` 覆盖 278 项测试（另有 211 个 subtest）：30 条固定案例、跨轮恢复、错误标识后调整、工单去重、用户隔离与敏感信息脱敏，证据冲突、关联请求排除、工具记录/用户消息中的提示注入和任务心跳修复，2026-10-22（P7）新增的流式与同步共用配额、429 无副作用、`enforce_limit` 不可经查询参数触达与瞬时 Redis TTL 统一配置用例，以及同日（P9）新增的 holdout 工具名 base 归一化用例（`mcp_` 前缀只在命中本地注册表时才剥离、`assess()` 默认口径不变、离线重算不改存盘官方报告）。实测结果见 [evaluation_report.md](evaluation_report.md)；模型在线演示需要有效的模型 API Key。
+`python -m pytest -q tests` 覆盖 304 项测试（另有 211 个 subtest）：30 条固定案例、跨轮恢复、错误标识后调整、工单去重、用户隔离与敏感信息脱敏，证据冲突、关联请求排除、工具记录/用户消息中的提示注入和任务心跳修复，2026-10-22（P7）新增的流式与同步共用配额、429 无副作用、`enforce_limit` 不可经查询参数触达与瞬时 Redis TTL 统一配置用例，同日（P9）新增的 holdout 工具名 base 归一化用例（`mcp_` 前缀只在命中本地注册表时才剥离、`assess()` 默认口径不变、离线重算不改存盘官方报告），以及同日（P10）新增的限流 fail-open/登录 `Retry-After` 用例与情景记忆保留 CLI 用例（dry-run 默认、`--apply` 才删、无 `ts` 不删、画像集合拒绝、Chroma 故障非零退出）。实测结果见 [evaluation_report.md](evaluation_report.md)；模型在线演示需要有效的模型 API Key。
 
 登录取得短期 token 后，写入当前进程环境变量 `DEVTRACE_EVAL_TOKEN`，再运行 HTTP 判定器；不要把 token 写入仓库或命令历史：
 
@@ -77,6 +77,8 @@ python -m developer.evaluate_memory --output developer/eval_memory.json
 错误处置手册：`developer/error_playbooks.json` 收录 Stripe/GitHub/Twilio 各 12 条（共 36 条）结构化错误条目，`lookup_error_playbook` 按症状/API/状态检索，返回可重试性、退避策略、恢复步骤与来源；`python -m developer.evaluate_error_playbooks` 对 40 条症状做回归（2026-10-18 为 40/40）。
 
 持久任务队列：设置 `DEVTRACE_TASK_QUEUE=enabled` 后，流式诊断由 Redis 队列 + `python -m api.worker` 独立执行；失败重试一次、耗尽进死信、worker 重启回收中断任务。Compose 已包含 `worker` 服务；同步接口保持进程内。队列/worker 用例见 `tests/test_task_queue.py`。
+
+情景记忆保留策略：`python -m developer.memory_retention --days 90` 读取 Chroma episodic 集合，按 metadata `ts` 找出早于保留窗口的记录。**默认 `--dry-run`**，只输出候选数量、按用户分布、涉及会话与"无可用 `ts` 的跳过数"，一条都不删；`--apply` 才真正删除（与 `--dry-run` 互斥），`--user <name>` 只能进一步缩小范围。三条硬边界：`ts` 缺失或不可解析的记录**不猜年龄、不删除**（记入 `skipped_no_ts`）；含 `profile` 的集合名直接拒绝执行——用户画像仍然只能通过 `DELETE /developer/profile` 显式删除；Redis 工作记忆与摘要继续由 `DEVTRACE_MEMORY_TTL_SECONDS` 过期，不归本工具管。`--days` 必须 ≥1，Chroma 连不上或读写失败会打印原因并以非零码退出，不会静默报成功。集合名与连接沿用服务的配置（`CHROMA_HOST`/`CHROMA_PORT`/`CHROMA_PERSIST_DIRECTORY`，默认集合 `developer_episodic`），Chroma 仍是演示级单实例、无按 workspace 分区。
 
 原生 tool calling：`AnthropicDecisionModel.choose_action` 优先把 ready steps 的 JSON Schema 作为 Anthropic `tools` 传给模型（`tool_choice=auto`），校验 `tool_use` 参数后执行；不支持的 provider 自动回退 JSON/规则，指标 `native_tool_calls` 可观察。
 
