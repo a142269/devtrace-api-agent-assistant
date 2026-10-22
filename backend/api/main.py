@@ -48,6 +48,9 @@ WORKER_ID = os.getenv('DEVTRACE_WORKER_ID', '').strip() or (
 WORKER_KEY_PREFIX = 'developer:worker:'
 WORKER_TTL_SECONDS = 90
 WORKER_HEARTBEAT_SECONDS = 30
+# Idle cadence of the in-process SSE keep-alive comment. A module constant so
+# tests can shorten it instead of waiting 15 real seconds.
+SSE_HEARTBEAT_SECONDS = 15.0
 
 
 def _flag(name: str) -> bool:
@@ -704,6 +707,22 @@ def _queue_enabled() -> bool:
     return os.getenv('DEVTRACE_TASK_QUEUE', '').strip().lower() in {'1', 'true', 'yes', 'enabled', 'redis'}
 
 
+async def _next_stream_event(get_task: 'asyncio.Task', timeout: float):
+    """Await the next queued SSE event, or return None when the queue stayed idle.
+
+    ``asyncio.wait_for`` cannot be used here: on Python 3.10 it returns the inner
+    result whenever that future is already done, so an external ``Task.cancel()``
+    landing in that window is silently discarded and the stream keeps running
+    after the client is gone. ``asyncio.wait`` propagates the cancellation and
+    leaves ``get_task`` alone on timeout, so no queued event is lost between two
+    keep-alive ticks.
+    """
+    done, _pending = await asyncio.wait({get_task}, timeout=timeout)
+    if not done:
+        return None
+    return get_task.result()
+
+
 async def _queued_stream(req: 'DeveloperChatRequest', user_id: str,
                          idempotency_key: Optional[str]):
     """Enqueue a streamed diagnosis and relay worker events from Redis."""
@@ -854,15 +873,21 @@ async def developer_chat_stream(req: DeveloperChatRequest, user_id: str = Depend
 
         await record_task('running')
         task = asyncio.create_task(execute())
+        # One getter per event instead of a fresh `queue.get()` inside the wait: the
+        # keep-alive timeout must not cancel a get that already dequeued an event.
+        get_task = asyncio.ensure_future(queue.get())
         try:
             yield f'event: started\ndata: {json.dumps({"task_id": task_id, "trace_id": trace_id})}\n\n'
             while True:
-                try:
-                    kind, data = await asyncio.wait_for(queue.get(), timeout=15)
-                except asyncio.TimeoutError:
+                item = await _next_stream_event(get_task, SSE_HEARTBEAT_SECONDS)
+                if item is None:
                     await _touch_task(_developer.redis, task_id)
                     yield ': heartbeat\n\n'
                     continue
+                # Re-arm only after the event was taken, so an idle tick keeps the
+                # pending get (and whatever it already dequeued) alive.
+                get_task = asyncio.ensure_future(queue.get())
+                kind, data = item
                 if kind == 'end':
                     break
                 # Every emitted event is activity too, so refresh the heartbeat here
@@ -871,9 +896,11 @@ async def developer_chat_stream(req: DeveloperChatRequest, user_id: str = Depend
                 yield f'event: {kind}\ndata: {json.dumps(data, ensure_ascii=False)}\n\n'
         finally:
             async def settle():
+                if not get_task.done():
+                    get_task.cancel()
                 if not task.done():
                     task.cancel()
-                await asyncio.gather(task, return_exceptions=True)
+                await asyncio.gather(task, get_task, return_exceptions=True)
                 if not terminal:
                     await record_task('cancelled')
                     await audit_finish('cancelled')
