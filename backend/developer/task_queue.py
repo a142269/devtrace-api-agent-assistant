@@ -11,6 +11,8 @@ import re
 import time
 import uuid
 
+from developer.ttl import redis_ttl_seconds
+
 QUEUE_KEY = 'developer:tasks:queue'          # legacy queue, drained last
 DEAD_KEY = 'developer:tasks:dead'
 INDEX_KEY = 'developer:tasks:queue-index'
@@ -18,7 +20,6 @@ DELAY_KEY = 'developer:tasks:delayed'        # sorted set, score = due timestamp
 RECLAIM_PREFIX = 'developer:task-reclaim:'  # short mutex guarding lease reclaim
 PRIORITY_QUEUES = ('high', 'normal', 'low')
 DEFAULT_PRIORITY = 'normal'
-EVENTS_TTL_SECONDS = 86400
 MAX_ATTEMPTS = 2
 DEFAULT_LEASE_SECONDS = 90
 MIN_LEASE_SECONDS = 30
@@ -80,7 +81,7 @@ async def get_task(redis, task_id: str):
 
 async def save_task(redis, task_id: str, record: dict) -> None:
     record['updated_at'] = time.time()
-    await redis.setex(task_key(task_id), EVENTS_TTL_SECONDS, json.dumps(record, ensure_ascii=False))
+    await redis.setex(task_key(task_id), redis_ttl_seconds(), json.dumps(record, ensure_ascii=False))
     if record.get('status') in {'queued', 'running'}:
         await redis.sadd(INDEX_KEY, task_id)
     else:
@@ -134,7 +135,7 @@ async def claim(redis, timeout: int = 5):
 
 async def append_event(redis, task_id: str, event) -> None:
     await redis.rpush(events_key(task_id), json.dumps(event, ensure_ascii=False))
-    await redis.expire(events_key(task_id), EVENTS_TTL_SECONDS)
+    await redis.expire(events_key(task_id), redis_ttl_seconds())
 
 
 async def read_events(redis, task_id: str, start: int = 0):

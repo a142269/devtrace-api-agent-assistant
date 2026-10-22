@@ -31,6 +31,7 @@ from developer.planner import (KIND_TO_TOOLS, MCP_READ_TOOLS, MCP_ROUTED_KINDS,
 from developer.public_docs import detect_public_api
 from developer.prompts import PROMPT_VERSION, render
 from developer.security import scan_observation, scan_untrusted, tainted_sources
+from developer.ttl import redis_ttl_seconds
 
 
 IDENTIFIER_RE = re.compile(r"\b(req_[A-Za-z0-9_-]+|delivery_[A-Za-z0-9_-]+)\b", re.I)
@@ -614,7 +615,7 @@ class DeveloperAssistant:
             # A checkpoint represents a resumable state if a worker or stream
             # stops before the next step is recorded. Ticket creation has its
             # own business idempotency key for the side-effect boundary.
-            await self.redis.setex(state_key, 86400,
+            await self.redis.setex(state_key, redis_ttl_seconds(),
                                    json.dumps({**state, 'status': 'waiting'}, ensure_ascii=False))
             pending_steps = [step for step in state["steps"] if step["status"] == "pending"]
             if not pending_steps:
@@ -834,13 +835,13 @@ class DeveloperAssistant:
                         "tool_latency_ms": round(sum(a.get('latency_ms', 0) for a in state['actions'][-actions_this_turn:]), 1) if actions_this_turn else 0,
                         "elapsed_ms": round((time.perf_counter() - started) * 1000, 1)},
         }
-        await self.redis.setex(state_key, 86400, json.dumps(state, ensure_ascii=False))
-        await self.redis.setex(f"developer:run:{run_id}", 86400,
+        await self.redis.setex(state_key, redis_ttl_seconds(), json.dumps(state, ensure_ascii=False))
+        await self.redis.setex(f"developer:run:{run_id}", redis_ttl_seconds(),
                                json.dumps({"user_id": user_id, "response": response}, ensure_ascii=False))
         history_key = 'developer:run-index:' + hashlib.sha256(user_id.encode()).hexdigest()
         await self.redis.zadd(history_key, {run_id: time.time()})
         await self.redis.zremrangebyrank(history_key, 0, -101)
-        await self.redis.expire(history_key, 86400)
+        await self.redis.expire(history_key, redis_ttl_seconds())
         await self.memory.add_message(user_id, conversation_id, MsgRole.USER, message)
         await self.memory.add_message(user_id, conversation_id, MsgRole.ASSISTANT, answer)
         if isinstance(self.model, AnthropicDecisionModel):
