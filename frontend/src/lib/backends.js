@@ -29,7 +29,11 @@ export async function requestDeveloperChat(settings, message, token, requestId, 
     method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}`, 'Idempotency-Key': requestId },
     body: JSON.stringify({ message, conversation_id: settings.developerConversationId || undefined }), signal
   })
-  if (!response.ok) { const data = await response.json().catch(() => ({})); throw new Error(data.detail || `请求失败 (${response.status})`) }
+  if (!response.ok) {
+    const data = await response.json().catch(() => ({}))
+    const hint = response.status === 429 ? '（请约 60 秒后重试）' : ''
+    throw new Error(`${data.detail || `请求失败 (${response.status})`}${hint}`)
+  }
   const reader = response.body.getReader()
   const decoder = new TextDecoder()
   let buffer = '', final = null

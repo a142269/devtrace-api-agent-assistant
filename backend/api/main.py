@@ -31,6 +31,7 @@ from developer.events import event_sink
 from developer.public_knowledge import PublicDocsKnowledge
 from developer.prompts import describe as describe_prompts
 from developer.planner import TOOL_TITLES
+from developer.ttl import redis_ttl_seconds
 from mcp.knowledge_base import KnowledgeBase
 from mcp.registry import connect_external_servers
 from mcp.tool_manager import MCPToolManager
@@ -39,7 +40,6 @@ from memory.conversation_memory import MemoryManager
 load_dotenv()
 logger = logging.getLogger(__name__)
 _developer = None
-TASK_TTL_SECONDS = 86400
 TASK_INDEX_KEY = 'developer:tasks:running'
 # A unique id per API process. Tasks record their owner so that a restarted or
 # additional replica only repairs work whose worker is actually gone.
@@ -110,7 +110,7 @@ async def _write_task_record(redis, task_id: str, user_id: str, status: str, run
         record['workspace'] = workspace
     if trace_id:
         record['trace_id'] = trace_id
-    await redis.setex(_task_key(task_id), TASK_TTL_SECONDS, json.dumps(record))
+    await redis.setex(_task_key(task_id), redis_ttl_seconds(), json.dumps(record))
     # The index lets a restarted process find the tasks an earlier process left behind.
     if status == 'running':
         await redis.sadd(TASK_INDEX_KEY, task_id)
@@ -131,7 +131,7 @@ async def _touch_task(redis, task_id: str) -> None:
     if record.get('status') != 'running':
         return
     record['updated_at'] = time.time()
-    await redis.setex(_task_key(task_id), TASK_TTL_SECONDS, json.dumps(record))
+    await redis.setex(_task_key(task_id), redis_ttl_seconds(), json.dumps(record))
 
 
 def task_is_stale(record: dict, now: Optional[float] = None) -> bool:
@@ -158,7 +158,7 @@ async def _mark_interrupted(redis, task_id: str, record: dict) -> dict:
     current['status'] = 'interrupted'
     current['interrupted_at'] = time.time()
     current['reason'] = '执行进程没有按时更新心跳；任务已标记为中断，可用同一会话发送“继续”重试'
-    await redis.setex(_task_key(task_id), TASK_TTL_SECONDS, json.dumps(current))
+    await redis.setex(_task_key(task_id), redis_ttl_seconds(), json.dumps(current))
     await redis.srem(TASK_INDEX_KEY, task_id)
     return current
 
@@ -335,7 +335,7 @@ async def _stamp_run(redis, run_id, workspace: str) -> None:
     if not isinstance(record, dict):
         return
     record['workspace'] = workspace
-    await redis.setex(key, TASK_TTL_SECONDS, json.dumps(record, ensure_ascii=False))
+    await redis.setex(key, redis_ttl_seconds(), json.dumps(record, ensure_ascii=False))
 
 class DeveloperChatRequest(BaseModel):
     model_config = ConfigDict(extra='forbid')
@@ -349,13 +349,34 @@ class LoginRequest(BaseModel):
 def current_user(request: Request, credentials: Optional[HTTPAuthorizationCredentials] = Depends(bearer)) -> str:
     return authenticated_user(request, credentials)
 
-async def limit(key: str, maximum: int) -> None:
+async def limit(key: str, maximum: int, *, retry_after: Optional[int] = None) -> None:
     # INCR and expiry are atomic, and shared by all application workers.
     count = await _developer.redis.eval(
         "local n=redis.call('INCR',KEYS[1]); if n==1 then redis.call('EXPIRE',KEYS[1],60) end; return n",
         1, key)
     if count > maximum:
-        raise HTTPException(429, '请求过于频繁，请稍后重试')
+        headers = {'Retry-After': str(retry_after)} if retry_after else None
+        raise HTTPException(429, '请求过于频繁，请稍后重试', headers=headers)
+
+CHAT_LIMIT_MAXIMUM = 30
+CHAT_LIMIT_WINDOW_SECONDS = 60
+
+
+def _chat_limit_key(user_id: str) -> str:
+    return 'developer:chat-limit:' + hashlib.sha256(user_id.encode()).hexdigest()
+
+
+async def enforce_chat_limit(user_id: str) -> None:
+    """Shared user quota: the sync and the streaming entry points spend the same key."""
+    try:
+        await limit(_chat_limit_key(user_id), CHAT_LIMIT_MAXIMUM,
+                    retry_after=CHAT_LIMIT_WINDOW_SECONDS)
+    except HTTPException as exc:
+        await audit.record(_developer.redis, 'chat.rate_limited', actor=user_id,
+                           status='failure', workspace=_workspace_of(user_id),
+                           detail={'kind': 'chat', 'status': 'failure',
+                                   'reason_code': 'rate_limited'})
+        raise exc from None
 
 @app.post('/auth/login', tags=['认证'])
 async def login(req: LoginRequest, request: Request):
@@ -392,9 +413,18 @@ async def developer_prompts(user_id: str = Depends(current_user)):
 @app.post("/developer/chat", tags=["开发者助手"])
 async def developer_chat(req: DeveloperChatRequest, user_id: str = Depends(current_user),
                          idempotency_key: Optional[str] = Header(default=None, alias='Idempotency-Key', max_length=120)):
+    return await _chat_core(req, user_id, idempotency_key)
+
+
+async def _chat_core(req: DeveloperChatRequest, user_id: str, idempotency_key: Optional[str],
+                     *, enforce_limit: bool = True):
+    # Internal-only flag: never expose it as a route parameter, or a client could set
+    # it to false and skip the quota. The streaming route spends the key before the
+    # response starts and calls here with enforce_limit=False.
     if _developer is None:
         raise HTTPException(503, "开发者助手未就绪")
-    await limit('developer:chat-limit:' + hashlib.sha256(user_id.encode()).hexdigest(), 30)
+    if enforce_limit:
+        await enforce_chat_limit(user_id)
     import uuid
     workspace = _workspace_of(user_id)
     # Tool events raised deep inside the assistant run inherit the workspace from
@@ -433,7 +463,7 @@ async def developer_chat(req: DeveloperChatRequest, user_id: str = Depends(curre
                                workspace=workspace, detail={'reason_code': 'error'})
             raise
         if idem_key:
-            await _developer.redis.setex(idem_key, 86400, json.dumps({'payload_hash': payload_hash, 'response': result}, ensure_ascii=False))
+            await _developer.redis.setex(idem_key, redis_ttl_seconds(), json.dumps({'payload_hash': payload_hash, 'response': result}, ensure_ascii=False))
         await _stamp_run(_developer.redis, result.get('run_id'), workspace)
         await audit.record(
             _developer.redis, 'chat.sync', actor=user_id, resource=str(result.get('run_id') or ''),
@@ -721,6 +751,9 @@ async def developer_chat_stream(req: DeveloperChatRequest, user_id: str = Depend
                                 idempotency_key: Optional[str] = Header(default=None, alias='Idempotency-Key', max_length=120)):
     if _developer is None:
         raise HTTPException(503, '开发者助手未就绪')
+    # Spend the shared user quota before any task record, queue entry or SSE bytes
+    # exist, so a rejected request leaves no half-finished task behind.
+    await enforce_chat_limit(user_id)
     if _queue_enabled():
         return await _queued_stream(req, user_id, idempotency_key)
     workspace = _workspace_of(user_id)
@@ -749,7 +782,7 @@ async def developer_chat_stream(req: DeveloperChatRequest, user_id: str = Depend
             nonlocal terminal
             reset_token = event_sink.set(lambda event: queue.put_nowait(('timeline', event)))
             try:
-                result = await developer_chat(req, user_id, idempotency_key)
+                result = await _chat_core(req, user_id, idempotency_key, enforce_limit=False)
                 status = 'waiting' if result.get('plan', {}).get('status') == 'waiting' else 'completed'
                 await record_task(status, result.get('run_id'))
                 await audit_finish(status)
