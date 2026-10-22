@@ -398,3 +398,38 @@ Agent 新增 `search_public_docs` 工具与 `public_api` 计划路径；模型�
 - 单元测试与静态检查：**258 项通过 + 211 个 subtest**，与 P7 基线逐项一致（产品代码未改，无新增用例；整表无负载 88.62 秒）。CI 的 Ruff `--select F` 清单仍是 **54 个文件**，本地按 CI 同参数整表 `All checks passed!`。
 - 一次需要如实记录的波动：与本轮 holdout **并发**跑测试时，`tests/test_api_security.py::test_cancelled_stream_task_records_cancelled_and_releases_lock` 连续两次失败（整表 257 通过 / 1 失败，耗时 243.67 秒），失败信息是 `CancelledError not raised` 并伴随 `流式诊断请求失败: 504`；单独跑该用例 **2.01 秒通过**，holdout 结束后整表复跑 **258 全绿（88.62 秒）**。判断：这条用例用 `asyncio.sleep(0.05)` 做时序同步，在本机被 Docker + 模型评测占满时会被拖过窗口，属**测试对时序的依赖**（flake），不是产品缺陷；本轮按范围纪律未改，列为 P9 项（改成事件驱动同步或显式等待）。
 - 未验证 / 边界：真实 provider 下的 **31 并发流式**突发仍未发（成本，且 P7 已在 rules 模式覆盖同一路径）；Redis 不可达或 Lua `eval` 抛错时的限流降级仍未测（现在会 500）；`GET /developer/metrics` 对演示用户仍是 403（未为此改权限），本轮依旧没有队列深度指标；模型仍是**单一 provider、单轮、40 条小样本**，token/费用未采集；共享 Redis 上的多环境 key 隔离、固定窗口"被拒请求也计数"的语义、按 IP/租户分层配额与网关限流都没做；标签与规则模式文档桩/传输拼写的绑定本轮只报告未修。全部为本机演示级验证，**不构成生产就绪结论**。
+
+## 评测口径修正与时间敏感测试修复（2026-10-22，P9）
+
+- 范围：只做两件事——给 P8 的 40 条模型结果加一层**补充评分**、修掉 P8 记录的那条时间敏感 flake。产品行为、holdout 案例、标签、断言、阈值、官方评分口径全部未改；本轮**零模型调用、零 HTTP 请求**（补充报告里 `cost.model_calls=0 / http_requests=0` 是实测口径，不是估算）。
+
+### 1. base 名补充评分（官方口径不动）
+
+- 官方报告 [eval_holdout_model_2026-10-22_full40.json](eval_holdout_model_2026-10-22_full40.json) 逐字节保留，**37/40 仍是本项目对外汇报的分数**。
+- 归一化定义：`normalize_tool_name()` 只剥 `mcp_` 前缀，且**只有剥出来的名字命中 `developer.planner.TOOL_SCHEMAS`** 才生效；本地拼写、未知/外部名（`mcp_ext_something`）、裸 `mcp_`、大小写不符、多余空格、非字符串一律原样返回——归一化不可能凭空造出一个没被调用过的工具。`assess()` 只在 `normalize_tools=True` 时启用，默认 `False`，所以**官方判定函数行为逐字未变**（`tests/test_holdout_normalization.py` 里有一条专门锁住这个默认）。工具**排除**项在归一化下只会更严（`mcp_x` 与 `x` 都算命中排除），不会放宽。
+- 离线重算：`python -m developer.evaluate_holdout --mode rescore --source developer/eval_holdout_model_2026-10-22_full40.json --output developer/eval_holdout_model_2026-10-22_full40_base_names.json`，只读已存盘的 `observed.tools` 与 `expected`；可重算的前提是"用存盘的工具能逐字复现官方 reasons"，复现不出就拒绝重算并写明原因，非工具类原因**永远原样带过、不重新判定**。
+- 结果：**base_names 39/40**（public_api 0/2 → **2/2**，auth 仍 4/5，其余分组逐条与官方一致）。逐条变化只有两条，都能指出改了哪一个 `missing_tool`：
+  - `h_public_playbook_path`：官方 reasons `["missing_tool:lookup_error_playbook", "missing_tool:search_public_docs"]` → 归一化后 `[]`；observed `[mcp_lookup_error_playbook, mcp_search_public_docs]`。
+  - `h_public_docs_path`：官方 `["missing_tool:search_public_docs"]` → `[]`；observed `[mcp_search_public_docs, mcp_lookup_error_playbook]`。
+  - 这两条**只说明标签绑定被对上，不说明能力提升**：同一份 observed、同一次运行，改的比较口径而已。报告里 `binding_fixed` 字段逐条列出被消除的原因。
+  - `h_quota_v2_doc_version_boundary` 归一化后**仍失败**，reasons 逐字不变（`evidence_missing:doc:v1 / 速率限制`），仍算证据/标签绑定规则模式文档桩问题，保留不掩盖。
+  - 3 条多轮案例（`h_multiturn_missing_then_id#2`、`h_multiturn_webhook_identifier_later#2`、`h_multiturn_wrong_id_then_correct#2`）**拒绝重算**，原因写明"合并记录只保留最后一步的工具，离线无法逐步骤归因"；这 3 条官方本来就是 pass，拒绝重算不会给补充分数注水。
+  - 补充报告的 `official` 段直接引用 P8 存盘 summary，不重算、不改写；CLI 在 base_names 未全过时同样 `exit 1`，防止这份报告被当成第二套绿灯。
+- 规则模式仍 40/40（未重跑；CI 继续只跑 `--mode rules`）。
+
+### 2. flake 修复（只改测试，产品代码零改动）
+
+- 用例：`tests/test_api_security.py::ApiSecurityTests::test_cancelled_stream_task_records_cancelled_and_releases_lock`。
+- P8 的猜测（"CPU 争用下 `sleep(0.05)` 被拖过窗口"）方向对、机制不对。实测根因有两层，都在这条用例里：
+  - **单次 `Task.cancel()` 会被 SSE 生成器自己的 `asyncio.wait_for(queue.get(), timeout=15)` 吞掉**。本机 Python 3.10 的 `wait_for` 在被外部取消时，如果内层 future 已完成就直接返回其结果，取消就此丢失；Fake assistant 一进 run 就投递 2 条时间线事件，队列非空时取消命中的正是这一路。生产路径由 Starlette/anyio 的 cancel scope 驱动，**电平触发**（后续检查点持续重抛），所以不是产品缺陷；测试用的边沿触发单次 `cancel()` 才会丢。探针 `p9_flake_probe.py`（工作区根目录，未入库）在"确认已进 run"之后单次 cancel，**20/20 次 consumer 2 秒内没结束、任务记录仍是 `running`**——旧写法的 100×20ms 轮询于是读到 `running` 而失败。
+  - **`assertRaises(asyncio.CancelledError)` 断的是 consumer 任务"以什么形态结束"，而这恰好由调度点决定**：取消落到 `_must_cancel` 路径 → 任务标记 cancelled、断言通过；落到 `_fut_waiter` 路径 → 取消传进生成器、被 `finally` 里那句 `except BaseException: pass` 咽掉、生成器正常返回 → 任务正常结束 → 报 "CancelledError not raised"。P8 两次失败信息正是后者。
+  - 顺带实测确认：`api/main.py:456` 的 `asyncio.wait_for(_developer.run(...), timeout=150)` 解释了 P8 那句"伴随 504"——取消被吞后，被模拟的 run 在 150 秒时被超时终结（我第一版改写保留旧断言时，单跑耗时正好 150.15 秒后 "CancelledError not raised"）。
+- 改法：
+  - `await asyncio.wait_for(self.assistant.entered.wait(), timeout=5)` 取代 `sleep(0.05)`：等的是"worker 确实进了 run 且仍阻塞在执行中"这个事件（`resume` 全程不置位）。
+  - 用 `mock.patch.object(main, '_write_task_record', spy)` 观测**产品自己写 `cancelled` 那一次记录**并置位一个 `asyncio.Event`，取代 100×20ms 轮询 Redis 值。
+  - 取消改为**重挂直到事件置位**（对齐 anyio 的电平触发语义），上限 100×50ms；判定只看事件，不看睡眠时长。
+  - 去掉对 consumer 异常形态的断言（上面第二条的不可判定项），改用 `contextlib.suppress(asyncio.CancelledError)` 收割任务。卡片列出的三项被测语义**全部保留并显式断言**：断流被取消、任务记录 `cancelled`、会话锁释放。
+- 压力自证（本机 `.dsh-venv`，Python 3.10）：单跑 **20/20** 通过（用例本体 0.195 秒）；再起 6 个 CPU 忙循环进程压满机器，单跑 **20/20** 通过；用 pytest 单独挑该用例跑 **10/10** 通过。修改前的证据不是"重跑旧版失败"，而是上面探针的 20/20 吞取消 + P8 记录的两次并发失败，如实区分。
+- 回归：整表 **278 项通过 + 211 个 subtest**（258 + P9 新增 20 项归一化用例），92.14 秒，旧用例无一改动、无一失败；CI 的 Ruff `--select F` 清单 54 → **55 个文件**（新增 `tests/test_holdout_normalization.py`），本地按 CI 同参数整表 `All checks passed!`。
+- 未验证 / 边界：本机没有 Python 3.12 可用（`py -3.12` 无安装），"`wait_for` 吞取消"在 3.11+ 是否完全消失**未验证**——新写法不依赖该行为（事件置位才判定，并持续重挂取消），CI 的 3.12 全绿只作为交叉验证而非压测；anyio 电平触发结论来自其语义与 P8 生产路径表现，本轮**没有**在真实 uvicorn 断连场景下重测；`--mode rescore` 只重算工具名这一类原因，标签仍绑定规则模式文档桩（`h_quota_v2_doc_version_boundary` 那条就是例子），没有修。全部为本机演示级验证，**不构成生产就绪结论**。
+- P10 候选（本轮按范围纪律不顺手做）：把 `eval_holdout_cases.json` 里那两条 public_api 标签改成 base 名或同时接受两种拼写（那是**改评分口径**，需要单独卡片与单独基线）；`verify_public_docs.py` 仍断言本地工具拼写，公开路径走 MCP 时 `has_playbook` 恒 false；SSE 生成器里 `wait_for(queue.get(), 15)` 的心跳写法可否换成不受外部取消吞噬的形式（属产品代码，需另做压测）；P7 遗留的被拒请求仍计数、登录 429 仍无 `Retry-After`、Redis 故障时限流降级仍 500、Chroma 保留策略。
