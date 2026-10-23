@@ -1,4 +1,4 @@
-# DevTrace 项目速览（评审 / 面试版）
+# DevTrace 项目速览（评审版）
 
 > 一句话：**DevTrace 是一个面向开发者平台 API 接入排障的受约束单 Agent**——覆盖 401、429、Webhook 失败三类问题，能把计划、工具调用、证据、记忆、流式任务和审计串成可回放的一条链。
 >
@@ -23,8 +23,6 @@
 2. **[架构说明](docs/ARCHITECTURE.md)**：看请求如何经过 API → Agent → 工具/队列 → Redis/Chroma。
 3. **[5 分钟演示脚本](docs/DEMO.md)**：知道实际跑起来该点哪里、看什么。
 4. **[评测报告](backend/developer/evaluation_report.md)**：看真实数字、失败项、为什么 37/40 而不是只报 40/40。
-5. **[面试问答](docs/INTERVIEW.md)**：看设计取舍、最难 bug、生产化差距。
-6. **[简历段落](docs/RESUME.md)**：可直接改写进简历。
 
 ## 这个项目最能说明什么
 
@@ -41,7 +39,7 @@
 - 并发/限流：`backend/developer/eval_load_2026-10-21.json`、`eval_stream_limit_2026-10-22.json`
 - 最终验收：`docs/FINAL_REVIEW.md`（已入库）
 
-## 诚实边界（面试请主动讲）
+## 诚实边界
 
 - 单 Agent，不做多 Agent 编排；候选计划评分是启发式，不是 ToT。
 - 演示级单机：单 Redis、单 Chroma，无副本/故障切换；生产身份、TLS、密钥轮换、WORM 审计未实现。
@@ -51,4 +49,4 @@
 
 ---
 
-如果你只有 30 秒：看上面的表 + 打开 tag 里的 README；如果你有 5 分钟：按 `docs/DEMO.md` 跑一遍；如果你在面试：直接看 `docs/INTERVIEW.md` 的 12 个问题。
+如果你只有 30 秒：看上面的表 + 打开 tag 里的 README；如果你有 5 分钟：按 `docs/DEMO.md` 跑一遍。

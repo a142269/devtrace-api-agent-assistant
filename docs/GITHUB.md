@@ -74,7 +74,7 @@ demo-2026-10-23.1 — 演示级收尾
 - 真实 `kill -9` worker 恢复验证；SSE 取消/stdio 编码/retention 分页/会话锁归属已收口
 - 已知限制：单租户、单 Redis/Chroma、无 WORM、外部 MCP 未接真实第三方、标签作者手写
 
-详见仓库 `docs/FINAL_REVIEW.md`、`docs/INTERVIEW.md`。
+详见仓库 `docs/FINAL_REVIEW.md`、`docs/ARCHITECTURE.md`。
 ```
 
 ## 6. 仓库首页建议顺序
