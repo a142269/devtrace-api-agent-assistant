@@ -651,5 +651,63 @@ Agent 新增 `search_public_docs` 工具与 `public_api` 计划路径；模型�
 2. `test_api_security.py`、`test_workspace.py`、`test_stream_cancellation.py` 里的 fake `eval` 桩仍是 `return 1`，不模拟比较删除。它们驱动的代码路径不经过会话锁释放，所以本轮结论不受影响；但**如果以后让这些 fake 也走 owner-aware 释放，必须先换成忠实模拟**，否则"锁释放成功"是桩给的假证据。
 3. `release_session_if_owner` 返回 0 无法区分"锁已消失"与"锁属于别人"。调用方只需保证"没碰别人的锁"，因此够用；若将来要据此判断"会话里是否还有活跃任务"，需要额外读取。
 4. Lua 脚本硬编码单 key 单参数（`KEYS[1]`/`ARGV[1]`），换 Redis Cluster 或改用 `register_script`/`EVALSHA` 时需重审。
-5. 同类"僵尸锁"形状还有两处**按范围纪律未修、只记录等裁定**：`task_queue.recover_running_tasks()`（worker 启动恢复）与 `api/main.py` 的 `reconcile_stale_tasks` / `_mark_interrupted`——它们标记中断任务时的锁处理本轮没有改动，也没有为其编写用例。
+5. 同类"僵尸锁"形状还有两处**按范围纪律未修、只记录等裁定**：`task_queue.recover_running_tasks()`（worker 启动恢复）与 `api/main.py` 的 `reconcile_stale_tasks` / `_mark_interrupted`——它们标记中断任务时的锁处理本轮没有改动，也没有为其编写用例。（**P13 当时的表述，保留原文**：这两处已在下一节 P14 收掉。）
+6. 全部仍是演示级、单 Redis、小样本验证，**不构成生产就绪结论**：没有多副本 API、没有真实故障切换、没有 WORM 审计、没有 TLS 与身份服务。
+
+## 剩余两条僵尸锁路径收口（2026-10-23，P14）
+
+基线 `ad6674c`（P13 HEAD），提交 `d6a1032`（`fix: finalize recovered tasks that exhaust retries`）+ `5b3d238`（`fix: release session locks when marking tasks interrupted`）+ 本轮文档提交。范围只收 P13 第 7 节点名的两条**同形状**路径：**零模型调用、不起 Docker 栈、不重跑 kill**，官方 holdout / 评分 / 案例 / 标签 / 提示词一字未动。
+
+### 0. 先钉住一个事实：两个索引不是同一个
+
+读代码核对出来的前提，直接决定这两条路径各自"持不持队列锁"：
+
+- `developer/task_queue.py:22` 的 `INDEX_KEY = 'developer:tasks:queue-index'`，由 `save_task()` 维护，里面是**队列任务**（`enqueue()` 写的记录带 `payload.conversation_id`，并且入队时 `try_claim_session` 持着 `developer:session-task:<sha256(user\0conversation)>`）。
+- `backend/api/main.py:43` 的 `TASK_INDEX_KEY = 'developer:tasks:running'`，由 `_write_task_record()` 维护，里面是**进程内流式路径**的记录，形状里没有 `payload`，本来就不持队列会话锁（它持的是另一把同步锁 `developer:session-lock:*`，本轮不碰）。
+- 但 `developer:task:<id>` 这个 **key 空间是两条路径共用的**：`GET /developer/tasks/{id}` 直接按 id 读记录做查询期修复（`main.py:622` 调用 `_mark_interrupted`），所以它**确实能把一个持着队列会话锁的队列任务判成 `interrupted`** —— 这才是路径二真正会留下僵尸锁的入口；`reconcile_stale_tasks()` 自己扫到的进程内记录只是补终态审计。
+
+本轮两条路由都改、都写用例，并明确区分"释放队列锁"与"只补审计"两种后果，不把两者混成一句"都修好了"。
+
+### 1. 路径一：`recover_running_tasks()` 耗尽重试后的终态
+
+- **缺口**：worker 启动恢复里 `attempts` 耗尽的 `else` 分支只置 `failed` + `rpush(DEAD_KEY)`，既不释放该任务的会话锁（该会话在整个 900 秒 TTL 内不可用），也不写 `task.finished`。
+- **修法**：把 P13 的 `_finalize_reclaimed_failure()` 泛化成共享 helper `finalize_terminal(redis, task_id, *, status, record=None, reason_code='')`（`developer/task_queue.py:237`），三条"没有 worker 来收尾"的路径共用：回收耗尽（`task_queue.py:310`，仍是 `status='failed'`、detail 仍只有 `{status, attempts}`，P13 已验收的 6 项回收断言逐字不变并复跑通过）、启动恢复耗尽（`task_queue.py:410`，直接复用已在手的 `record`，不再回读）、`interrupted` 修复（见第 2 节）。helper 的语义：读记录失败 → warning 且**直接返回**（无法归属就不写任何书，保留 P13 语义）；锁释放单独 `try`，失败只 warning、**审计照旧写入**；`audit.record` 本身 never-raise。
+- **不猜 key**：只有记录**同时**给出 `user_id` 与 `payload.conversation_id` 才做比较删除（`task_queue.py:265`），否则记一条 info 并跳过（`task_queue.py:272`）。审计 `actor` 仍沿用 `anonymous` 兜底，但那只是一个字段值，不再拿它去拼锁 key。
+- **测试**：`tests/test_queue_production.py` 新增 4 项（`# 3c` 一节）——耗尽后 failed + 进死信 + **不再出现在就绪队列** + 锁消失 + 同会话可再次 claim + `task.finished` **恰 1 条**（`detail == {'status': 'failed', 'attempts': 2}` 且落在 `audit.DETAIL_FIELDS` 白名单内）；仍有重试预算时锁保留、**零终态审计**；恢复赶不上新任务持有者时**绝不删新锁**；锁释放抛 `RedisError` 时终态与审计仍落地。
+
+### 2. 路径二：`_mark_interrupted()` / `reconcile_stale_tasks()`
+
+- **缺口**：把残留 `running` 改成 `interrupted` 并 `srem` 索引，但从不释放队列会话锁，也从不写 `task.finished`——于是队列任务被 API 判成中断后，`reclaim_expired()`（只看 `running`）不会再碰它，锁一直挂到 TTL 自然过期。
+- **修法**：`main.py:170` 在写完 `interrupted` 与索引清理之后调用 `task_queue.finalize_terminal(..., status='interrupted', record=current, reason_code='stale_heartbeat')`，detail 为 `{status, attempts, reason_code}`（三个键都在白名单内，`workspace`/`trace_id` 取自记录，正文与工具结果一概不进流）。
+- **不双写**：`_mark_interrupted` 原有的"写前重读 + `updated_at` 必须相等"门卫（`main.py:153`—`160`）使得一旦已经是终态就直接返回，重复 reconcile、或对同一条记录再调一次 `_mark_interrupted` 都**不再写第二条审计、不再尝试释放**；owner-aware 释放本身也是幂等的。测试用 fake 记录的 `eval_calls` 计数断言"第二次连一次比较删除都没发起"。
+- **测试**：新增 `tests/test_interrupted_tasks.py`（314 行 / 12 项，fake Redis，不 import 产品私有桩），两条路由都覆盖：`reconcile_stale_tasks` 直扫 8 项，其中 4 项走真实 ASGI 端点 `GET /developer/tasks/{id}`。断言面包括：中断后锁消失且同会话立即可用、审计恰 1 条且 `workspace`/`trace_id`/`actor` 正确、**消息正文不出现在审计流**、进程内记录（无 conversation）**一次 `eval` 都不发起**、缺 `user_id` 同样跳过且锁原地不动（`actor` 记为 `anonymous`）、owner 是活 worker 时**完全不动**、端点上健康任务不被修复、`payload`/`user_id`/`lease_*` 不出现在视图里。
+
+### 3. 变异对照（每次都字节备份 + `cmp` 还原后复跑整表）
+
+| 变异 | 改动 | 结果 |
+| --- | --- | --- |
+| A | 删掉 `recover_running_tasks()` 里的 `finalize_terminal` 调用 | **恰好 3 项失败**（3 条启动恢复断言），而"仍有重试预算 → 锁保留、零审计"那项**正确保持绿色** |
+| B | `finalize_terminal` 内 owner-aware 释放 → 无条件盲删 | **4 项失败**（回收与启动恢复的"不删新锁"各 1 项 + 两个锁故障注入项，因为补丁点已不再被调用），"自己的锁被释放 / 审计写入"两类断言仍绿色 |
+| C | `_mark_interrupted` 的收尾换成 `pass` | **8 失败 / 4 通过**（4 项绿色正是"活 worker 不动它""端点不修健康任务""视图不泄露""只改状态"这些不依赖收尾的用例） |
+| D | 去掉"不猜 key"门卫（永远尝试释放） | **恰好 2 项失败**，正是两条"绝不发起比较删除"的断言 |
+
+### 4. 回归与静态检查
+
+- 整表 **355 → 371 项通过 + 219 个 subtest**（+16：`test_queue_production.py` 4 项、新 `test_interrupted_tasks.py` 12 项），两个口径都全绿：不带 `PYTHONUTF8=1` **371 passed / 118.44s**，带 **371 passed / 120.71s**（本机 Python 3.10.18）。subtest 数与 P13 一致（本轮没动带 subtest 的用例）。文档提交后的工作树又复跑一轮确认纯文档改动不影响结果：不带 **371 passed / 130.18s**、带 **371 passed / 119.85s**（墙钟随宿主负载浮动，P13/P14 各轮之间不可比）。
+- CI Ruff `--select F` 清单 61 → **62 个文件**（新增 `tests/test_interrupted_tasks.py`），本地按 CI 同参数跑 **62 个文件** `All checks passed!`。
+- 规则模式 holdout 作为回归重跑：**40/40**、退出码 0，逐组数字取自当次输出 JSON（conflict 3/3、auth 5/5、quota 3/3、ambiguity 3/3、webhook 4/4、combo 5/5、injection 7/7、anomaly 3/3、negative 2/2、multiturn 3/3、public_api 2/2；`by_decision_mode` 只有 `rules`，`by_batch` 19+21），输出写到工作区根 `.p14_rules.json`，**仓库内官方报告未被覆盖**；零模型调用。`git diff ad6674c..HEAD -- developer/eval_holdout_model_2026-10-22_full40.json developer/eval_holdout_cases.json developer/eval_holdout_model_2026-10-22_full40_base_names.json` 为空——官方模型模式 37/40 与 base 名补充 39/40 两份结论未重跑、未改动。
+- 范围证据：`git diff --name-only ad6674c..HEAD`（代码提交）只有 5 个文件——`.github/workflows/ci.yml`、`backend/api/main.py`、`backend/developer/task_queue.py`、`backend/tests/test_queue_production.py`、新增 `backend/tests/test_interrupted_tasks.py`；`planner.py`、`prompts.py`、`assistant.py`、`memory/`、`mcp/`、`frontend/`、限流器全部 diff 为空。
+
+### 5. 流程与文档要求
+
+- P12 立下的硬规则原样保留在 P13 第 6 节，本轮未重跑 kill 演练，因此不重复取证；`backend/developer/升级进度.md` 与交接文档把它列为**演示级验证的长期硬规则**而不是本轮结论。
+- `task_queue.dead_letter()`（`developer/task_queue.py:415`）**没有任何生产调用点**，属已知死代码。本轮按卡片**只记录、不删除**：它与 `requeue_or_fail()` 的耗尽分支形状相同但不写终态审计，删除与否留给 P15 裁定。
+
+### 6. 未验证 / 风险
+
+1. **真实 Redis / 真实队列栈未复跑**（卡片明确禁止本轮起 Docker、零模型调用）。`release_session_if_owner` 的 Lua 早已在 P13 第 3 节对真实 Redis 取证过，本轮是**复用同一原语**；`interrupted` 与"启动恢复耗尽"两条新收尾路径只有 fake Redis 与单元证据。
+2. **窄双写窗口仍在**：如果某 worker 心跳 TTL 过期但进程仍在计算，API 会先把它标成 `interrupted` 并写审计，worker 完成时还会写自己的 `task.finished` → 同一条任务出现两条终态审计（状态不同）。`_mark_interrupted` 的"写前重读"只把窗口缩小、不是原子 CAS，本轮没有改这个协议（改成 Lua CAS 会动到 worker 终态链路与 P13 已验收断言，超出卡片范围）。会话锁不会因此被误删（owner-aware + 幂等）。
+3. 三个既有 fake（`test_api_security.py`、`test_workspace.py`、`test_stream_cancellation.py`）的 `eval` 桩仍是盲目 `return 1`。**注意：P13 第 7 节说"它们驱动的路径不经过会话锁释放"这句话现在已经不完全成立**——`_mark_interrupted` 会调用它。核对过这三处的断言面：它们只断言状态、索引与计数，不断言锁归属行为，因此结论不受影响；但**任何人今后想在这些文件里断言锁语义，必须先换成忠实比较删除模拟**，否则"锁释放成功"是桩给的假证据。
+4. `finalize_terminal()` 与调用方之间没有分布式事务：审计 best-effort（`audit.record` 内部吞异常），所以"任务确实终态了"与"审计里查得到"在 Redis 故障窗口内可以不一致；这与 P1/P3 以来的既有取舍一致。
+5. `release_session_if_owner` 返回 0 仍无法区分"锁已消失"与"锁属于别人"；Lua 仍硬编码单 key 单参数。
 6. 全部仍是演示级、单 Redis、小样本验证，**不构成生产就绪结论**：没有多副本 API、没有真实故障切换、没有 WORM 审计、没有 TLS 与身份服务。
