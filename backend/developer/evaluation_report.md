@@ -522,3 +522,76 @@ Agent 新增 `search_public_docs` 工具与 `public_api` 计划路径；模型�
 7. 全部为小样本、单 provider、单机演示级验证，**不构成生产就绪结论**。
 8. P12 候选：限流器与 Redis 的健康检查/熔断与恢复压测、按 IP/租户分层配额或网关级限流、保留 CLI 的定时任务与"删除窗口内并发写入"的一致性设计、按 workspace 分区 Chroma 集合、`verify_public_docs.py` 的工具拼写断言、MCP stdio 的 Windows 区域设置矩阵与真实 `kill -9` 恢复、多 provider 评测。
 
+## SSE 取消语义、真实 kill -9 恢复与公开文档脚本（2026-10-22，P12）
+
+基线 `6beb3ca`（P11 已验收）。本轮做三件收尾：修进程内 SSE 心跳吞掉外部取消（**产品代码**）、真实 `docker kill` 崩溃恢复取证（**Docker，不注入假租约**）、修工作区验证脚本 `verify_public_docs.py` 的工具拼写断言（**不入库**）。官方 40 条 holdout 的案例、标签、断言、评分口径与所有已发布报告零改动，官方评测未重跑打分。
+
+### 1. SSE 心跳的取消语义（`api/main.py`）
+
+- **根因**：进程内 SSE 生成器用 `asyncio.wait_for(queue.get(), 15)` 兼作空闲心跳。Python 3.10 的 `wait_for` 内部是 `except CancelledError: if fut.done(): return fut.result()`——**当 `queue.get()` 已经完成（事件刚入队还没被取走）时，落在这个窗口里的一次外部 `Task.cancel()` 被静默丢弃**。后果：客户端已断开而生成器继续跑，任务记录停在 `running`，会话锁要等 180 秒 TTL 才自然消失。3.11+ 的 `wait_for` 改用 `asyncio.timeout` 重写、取消是电平触发的，所以这条只在 3.10 稳定复现（本机 3.10.18），CI 3.12 看不见。
+- **修法**：新增 `_next_stream_event(get_task, timeout)`，用 `asyncio.wait({get_task}, timeout=timeout)` 取代 `wait_for`。`asyncio.wait` 不吞取消，而且**超时不会取消内部 task**，所以两次心跳之间已入队的事件不会丢；空闲时返回 `None`，生成器照旧发 `: heartbeat\n\n` 并 `_touch_task` 刷新任务心跳。
+- 生成器改为"**一个事件一个 getter**"：`get_task` 在循环外创建，**取到事件之后**才重新 arm，空闲 tick 保留那个挂起的 getter（这正是旧写法丢取消的对偶问题：在 wait 里现开 `queue.get()`，超时就会取消一个可能已经取到事件的 get）。
+- `finally` 里的断开清理**逻辑未变**：取消 worker task 与 getter、`gather(..., return_exceptions=True)`、未终结则写 `cancelled` 记录 + `task.finished` 审计，仍用 `asyncio.shield` 包住以免清理自身被同一个取消带走。
+- 心跳周期提为模块常量 `SSE_HEARTBEAT_SECONDS = 15.0`，测试可缩短它，不必真等 15 秒。
+- **未改**：SSE 事件格式与 `started/timeline/complete/end` 顺序、150 秒上限、断开清理语义、队列模式 relay（`_queued_stream` 的心跳本来就是 sleep 轮询，不受此 bug 影响）、`_chat_core` 的 `asyncio.wait_for(..., 150)` + 504、以及 P9 修好的那条 `test_api_security.py` 用例（一字未动，本轮只补不改）。
+
+**证据（新增 `tests/test_stream_cancellation.py`，12 项 + 6 个 subtest）**
+
+- **确定性单元对照**（不依赖调度）：`test_single_cancel_propagates_when_the_event_is_already_queued` 断言 `_next_stream_event` 在"事件已入队"时收到单次 `cancel()` 会抛 `CancelledError`；`test_stdlib_wait_for_shape_swallows_the_same_cancel` 在同一位置用旧的 `wait_for` 写法断言**不抛**（`@skipIf(sys.version_info >= (3, 11))`，本机 3.10 实跑通过，即负向对照成立；CI 3.12 上该项按设计跳过）。
+- 空闲语义：`test_idle_timeout_leaves_the_getter_armed_and_loses_nothing`（超时后 getter 仍挂着，随后发布的事件照样拿到）、`test_cancelling_the_getter_after_an_idle_tick_keeps_the_queue_intact`、`test_each_wait_returns_the_next_event_not_a_repeat`（三条计划逐条返回，不是重复第一条——这条是为了钉住"重新 arm"这个不变量，漏掉它就是死循环）。
+- 集成层：单次 `cancel()` 后流 promptly 结束、记录 `cancelled`、会话锁释放；**事件驱动**（spy `_write_task_record` 置 `asyncio.Event`），无 sleep 轮询；4 条 timeline 已入队时单次 cancel 仍传播；连续 6 次"单次 cancel"子测试全过；心跳用 `SSE_HEARTBEAT_SECONDS=0.05` 验证仍发 `: heartbeat` 且刷新任务心跳；正常 `complete` 路径事件顺序不变、`asyncio.all_tasks()` 前后差集为空（无泄漏 task）；`aclose()` 模拟客户端断开仍记 `cancelled`。
+- **修复前后的对照是概率性的，如实记录**：修复前把这条集成用例连跑 5 次 **0/5 通过**，修复后 **5/5 通过**；但基线整表 `-v` 单跑时其中 2 项曾偶然通过、另 2 项失败——"吞取消"是否显形取决于取消落在哪个调度点。因此结论以**确定性单元对照 + 5× 循环**为准，不用单次绿灯或单次红灯下结论。
+
+### 2. 真实 `kill -9` 崩溃恢复（Docker，隔离栈 `devtrace-verify`）
+
+- **栈与配置**：API 映射 18002，`--scale worker=2`，`DEVTRACE_TASK_QUEUE=enabled`，`DEVTRACE_TASK_LEASE_SECONDS=30`（代码下限 `MIN_LEASE_SECONDS`，用未入库的 `devtrace-compose.p12kill.yml` overlay 注入），worker overlay 里 `restart: "no"`（被 `docker kill` 的 worker 必须保持死掉，才能证明是**幸存**那个回收了租约），两个 worker 都通过 bind overlay 只读挂载工作树源码，跑的就是被测代码。`backend/.env` 全程未读未改，收尾 `down` **未加 `-v`**（三个卷保留）。
+- **模型模式的取舍与成本超支（如实披露）**：卡片要求优先 rules 模式。实测 rules 模式下同一任务的 `running` 窗口只有 **0.151 秒**（task `d4e85e6c`、会话 `p12-window-1`），宿主侧 `docker kill` 无法落进去，测不到"打断执行中任务"；因此本轮 kill 取证切到 `DEVELOPER_MODEL_MODE=anthropic`，一次真实调用把 `running` 撑到 ~11 秒。**卡片允许最多 2 次模型调用，实际按当时容器日志统计为 7 次 provider 调用**：被 SIGKILL 打断的那次运行 1 次（kill 落在它 3 次调用的第 1 次前后，未完成整轮）+ 幸存 worker 重跑 3 次 + 复验"会话锁已释放"的补发请求 3 次（这个 build 里一次 assistant 运行 = 3 次 provider 调用，卡片给的 2 次预算是按"1 次运行 = 1 次调用"估的，估算错了）。容器 `down` 之后日志随之删除，**这 7 次无法事后复核**，按当时读数披露。P12 其余所有验证（第 3 项与整表回归）都在 rules 模式，**零额外调用**。
+- **时间线**（UTC，全部取自容器内探针写出的时间戳；会话 `p12-kill-120736`，task `f26a644e-58db-4e64-9252-0ad7b5278734`，消息 `API 返回 401，怎么排查？`）：
+
+  | 时刻 | 事件 |
+  | --- | --- |
+  | 04:07:40.348 | 客户端 POST `/developer/chat/stream`，任务入队 |
+  | 04:07:40.766 | worker-2（`d10e9f831c1a-1-2876e1`，容器 `devtrace-verify-worker-2`）置 `running`，`attempts=0`，`run_id=null`，租约到 04:08:10.741 |
+  | 04:07:41.984 | `docker kill devtrace-verify-worker-2`：`State.ExitCode=137`、`OOMKilled=false`（= SIGKILL），**落在任务进入 running 后 1.22 秒** |
+  | 04:08:10.741 | 租约到期 |
+  | 04:08:13.860 | 幸存 worker-1（`6e5a960e2f5b-1-79bc71`）日志 `reclaimed 1 task(s) with expired leases`（kill 后 **32.9 秒**） |
+  | 04:08:13.907 | 记录 → `queued`，`attempts` **0 → 1**，进延迟重试队列 |
+  | 04:08:18.910 | 提升后被 worker-1 认领，重新 `running`，新租约 |
+  | 04:08:30.323 | 终态 `waiting`，`run_id=5c258006-4297-4b73-817f-34abc59e6a69`，重跑耗时 **11.43 秒** |
+
+- **"任务确实在执行中"的证据**：kill 时记录是 `running`、`attempts=0`、`run_id=null`（还没有任何运行记录）、租约有效；同一条消息由幸存 worker 重跑用了 11.43 秒，而被杀那次只跑过 1.22 秒。不是"刚入队还没开始"或"已经跑完"。
+- **客户端全程连着**（队列 relay 路径），SSE 相对发送时刻：`event: started` +0.39s → `: heartbeat` +15.45s、+30.51s（**跨过 kill 与回收窗口**，连接没断也没静默）→ timeline 事件 +39.74s…+40.74s（plan/approval/selection/action/observation/status）→ `: heartbeat` +45.56s → `event: complete` + `<eof>` +49.97s。客户端拿到的是恢复后的结果，没有挂死。
+- **卡片要求的断言逐条核对**（`04_verify.json` / `09_verify_after_resend.json`）：终态唯一 = `waiting`；`task.finished` 审计**恰好 1 条**（`task_finished_count=1`，statuses `["waiting"]`），该任务的审计事件只有 `task.enqueued` + `task.finished`；`run_id` 唯一且运行记录存在、归属用户匹配；`attempts` 0 → 1（合理增长，没有无谓重跑）；`error=null`、`cancel_requested=false`（**没有**因为客户端还连着而被误判成取消）；不在死信队列、不在延迟队列；high/normal/low 三条队列长度全 0；会话锁已释放（`session_lock_exists=false`、`ttl=-2`）。
+- **终态是 `waiting` 而不是 `completed`，说明清楚**：`api/worker.py` 的映射是 `status = 'waiting' if (result.get('plan') or {}).get('status') == 'waiting' else 'completed'`。这一轮计划提议 `search_api_docs → get_request_trace → inspect_key_scope`，只执行完 s1 就把下一步交回用户，计划状态是 `waiting`。`waiting` 是队列的**第三个终态**：worker 同样写 `finished_at`、发 `task.finished`、释放会话锁，relay 同样发 `event: complete`。所以"唯一终态、不挂死、锁已释放"这些断言成立，但**不能说它跑成了 `completed`**——卡片期望的是 `completed` 或明确的 `failed`，实际拿到的是第三种合法终态。
+- **锁释放后同会话可继续**：在 `p12-kill-120736` 上补发一条流式请求 → 新任务 `ce311c56-a6b0-41d8-88d2-20163cde0638`，`status=waiting`、`attempts=0`、`run_id=aa846e5f-8211-48a6-bb4c-c26955aed890`，成功执行。
+- **会话锁是否挡住 reclaim？——不挡，所以卡片里那条"条件性提交"没有做**：Docker 轮已经证明锁还握在死掉的 worker 名下时，幸存 worker 照样回收了租约并重跑成功（`release_session` 是在任务终态时由 worker 调的，不是 reclaim 的前置条件）。按范围纪律，本轮**不顺手改** `release_session`，改为用只读探针（`p12_reclaim_probe.py`，复用队列单测的 fake Redis，不入库、不改产品代码）把两个真实缺口取证给 P13：
+  1. **维护循环耗尽重试次数时不释放会话锁、也不写 `task.finished`**：第一次崩溃 → `reclaim_expired` 重排队（`attempts=1`，锁仍属 task-A，这是对的，任务还要重跑）；第二次崩溃 → `reclaim_expired` 走 `requeue_or_fail` 撞到 `MAX_ATTEMPTS=2`，记录变 `failed` + 进死信，但**锁仍 held by task-A**，紧接着 `try_claim_session('task-B')` 返回 **false** —— 这个会话在锁的 900 秒 TTL 内彻底不可用，而且这条终结路径**没有任何 `task.finished` 审计**（`developer/task_queue.py` 里零审计调用，`task.finished` 只在 `api/main.py` 与 `api/worker.py` 写）。
+  2. **`release_session` 是无条件 `DEL`，会删掉别人的锁**：task-A 的延迟清理在 task-B 已持有同一会话锁之后执行 → 锁被删（`held: true/owner task-B` → `held: false`），随后 task-C 的 `try_claim_session` 返回 **true** —— 同一会话出现两个并发执行的任务。锁值里本来就存着 `task_id`，所以正确修法是 Lua 比较后删（`GET == ARGV[1] then DEL`），**绝不能**盲删其他任务/用户的锁；本轮只取证，不改。
+
+### 3. 公开文档验证脚本 `verify_public_docs.py`（工作区文件，**不入库**）
+
+- **修复前的断言差异**：脚本把 `has_playbook` 写成 `"lookup_error_playbook" in tools`（本地拼写）。base compose 默认 `DEVTRACE_MCP_PUBLIC_TOOLS=enabled`，公开文档路径改由 MCP server 托管，`actions` 里的工具名带传输前缀，实际是 `mcp_lookup_error_playbook` / `mcp_search_public_docs`，于是 `has_playbook` 恒 **false** → 脚本 exit **1**，而其余五项判定（`has_retry_guidance`/`has_recovery`/`has_source`/`has_public_disclaimer`/`plan_status=complete`）全为 true。这与 P9 给 holdout 那两条 public_api 标签做的是同一层归因：**标识符与传输拼写绑定，不是能力缺口**。
+- **修复**：比较改为按 base 名归一化（剥掉 `mcp_` 前缀后与 `lookup_error_playbook` 相等），其余判定、消息、门禁条件、退出码语义**一字未改**。顺带把输出路径从仓库内的官方报告 `backend/developer/eval_error_playbooks_http_2026-10-18.json` 改到临时路径（`tempfile.gettempdir()/verify_public_docs.json`）——脚本原来会**覆盖已发布的官方报告**，这轮跑完 `git status backend/developer/` 为空，官方报告未被触碰。脚本本身按约定不提交。
+- **实测（`devtrace-verify` 栈，rules 模式，`DEVTRACE_MCP_PUBLIC_TOOLS=enabled`，零模型调用）**：
+  - 修复前的断言逻辑（同一份请求，控制跑）：HTTP 200、`kind=public_api`、`plan_status=complete`、`tools=["mcp_lookup_error_playbook","mcp_search_public_docs"]`、`decision_mode=rules`、`has_playbook=false`（base 名口径为 true）、其余四项 true → **exit 1**；
+  - 修复后：**同一组判定 `has_playbook=true`，其余五项不变，exit 0**。
+  - 前后**只有 `has_playbook` 这一项翻转**，其他断言的取值逐字相同，说明修复没有放宽任何别的东西。
+
+### 4. 回归与静态检查
+
+- 整表 **325 → 337 项通过 + 211 → 217 个 subtest**（新增 `tests/test_stream_cancellation.py` 12 项 + 6 个 subtest），两个口径都全绿：带 `PYTHONUTF8=1` **337 passed / 70.99s**，不带 **337 passed / 54.63s**（Windows 本机 Python 3.10.18）。旧用例无一改动、无一失败。CI 跑 3.12，`test_stdlib_wait_for_shape_swallows_the_same_cancel` 按 `skipIf` 设计跳过，预期 CI 为 336 passed + 1 skipped。
+- CI Ruff `--select F` 清单 59 → **60 个文件**（新增 `tests/test_stream_cancellation.py`），本地按 CI 同参数 `All checks passed!`。
+- 规则模式 holdout 作为回归重跑：**40/40**（conflict 3/3、auth 5/5、quota 3/3、ambiguity 3/3、webhook 4/4、combo 5/5、injection 7/7、anomaly 3/3、negative 2/2、multiturn 3/3、public_api 2/2；`by_decision_mode` 只有 `rules`、`by_batch` 19+21），退出码 0，输出写到工作区根目录 `.p12_rules.json`，**仓库内官方报告未被覆盖**；零模型调用。这只是回归，**官方模型模式 37/40 与 base 名补充 39/40 两份结论本轮未重跑、未改动**。
+- 范围证据：`git diff --name-only 6beb3ca` 只有 4 个已跟踪文件（`.github/workflows/ci.yml`、`backend/api/main.py` + 本轮文档）与新增 `backend/tests/test_stream_cancellation.py`；`backend/developer/task_queue.py`、`api/worker.py`、`developer/planner.py`、`prompts.py`、`assistant.py`、`memory/`、`mcp/`、`frontend/`、以及所有 `eval_*.json` 官方报告的 diff 为空。
+
+### 5. 未验证 / 风险
+
+1. **3.11+/3.12 上的 `wait_for` 行为无法本机复现**：本机只有 3.10.18，负向对照用例在 3.11+ 按设计跳过。修复本身（`asyncio.wait`）在两个版本上语义一致，但"3.11+ 的 `wait_for` 确实会传播取消"这条只来自 CPython 变更说明与 CI 绿灯，没有本机专项对照。
+2. **只做了单次 kill，没做"连环 kill"**：两个 worker 先后被杀、或幸存 worker 也在重跑中被杀的路径未在 Docker 上跑过。第 2 节的探针在 fake Redis 上覆盖了"第二次崩溃"，但那是实现级取证，不是真实栈。
+3. **`waiting` 终态不等于任务做完了**：这一轮的计划把下一步交回用户，所以 `waiting` 是正确结果，但它同时说明"崩溃恢复后任务成功终结"与"用户问题被完整解决"是两件事，本轮只验证前者。
+4. **kill 落点是概率性的**：`docker kill` 落在 `running` 后 1.22 秒，靠的是真实模型调用把窗口撑到 ~11 秒。rules 模式窗口 0.151 秒，打不进去；如果 provider 更快或更慢，落点会漂移。没有做"kill 恰好在工具执行中间 / 恰好在写运行记录时"的分相验证。
+5. **成本超支已披露但无法复核**：7 次 provider 调用超出卡片允许的 2 次，计数来自当时的容器日志，`down` 之后不可复核（见第 2 节）。
+6. **两个会话锁缺口只取证未修**（第 2 节末尾）：维护循环终结路径不释放锁 / 不写审计，以及 `release_session` 无条件 `DEL` 可能删掉更新任务的锁。当前 900 秒锁 TTL 会把第一种情况的影响限制在 15 分钟内，第二种需要"任务 A 的清理延迟到任务 B 已认领之后"才会显形，本轮**没有在真实栈上构造出这个竞态**，只有 fake Redis 上的路径证明。
+7. 全部为小样本、单 provider、单机演示级验证，**不构成生产就绪结论**：没有多副本 API、没有真实故障切换演练、没有 WORM 审计、没有 TLS 与身份服务。
+8. P13 候选：`release_session` 改 Lua 比较后删（锁值已存 `task_id`）+ 单测；`reclaim_expired`/`requeue_or_fail` 的终结路径补 `release_session` 与 `task.finished` 审计；连环 kill 与"kill 落在写运行记录瞬间"的分相演练；队列 relay 的 `end` 事件延迟收敛（本轮终态到 `<eof>` 之间还有一次 15 秒心跳间隔）；限流器健康检查/熔断；按 IP/租户分层配额；保留 CLI 的定时触发；多 provider 评测。
+
