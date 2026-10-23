@@ -234,36 +234,48 @@ async def promote_delayed(redis, now: float | None = None) -> int:
     return promoted
 
 
-async def _finalize_reclaimed_failure(redis, task_id: str) -> None:
-    """Close the book a reclaimed task leaves behind when it dead-letters.
+async def finalize_terminal(redis, task_id: str, *, status: str,
+                            record: dict | None = None,
+                            reason_code: str = '') -> None:
+    """Close the bookkeeping a task leaves when no worker will ever finish it.
 
-    The worker that died never reached its own terminal handling, so the
-    maintenance loop has to do two things it would otherwise skip: release the
-    session lock this task owned, and write the single ``task.finished`` audit.
-    Without them the conversation stays blocked for the full 900s lock TTL and
-    the terminal state is invisible in the audit stream.
+    Three paths end a task outside a worker's own terminal handling: lease
+    reclaim that exhausted the attempt budget, worker-startup recovery of a task
+    whose worker died mid-run, and stale/`interrupted` repair. All of them must do
+    the two things that path would otherwise skip - release the session lock this
+    task owned, and write the single ``task.finished`` audit - or the conversation
+    stays blocked for the full 900s lock TTL and the terminal state never appears
+    in the audit stream.
 
     Best-effort by design: neither the lock release nor the audit may break the
-    reclaim cycle, so faults are logged and swallowed. The worker's own failure
-    path already writes its audit and releases its lock; this only runs for the
-    lease-expiry path, where that code never executed, so no event is doubled.
+    caller's loop, so faults are logged and swallowed. The release is owner-aware,
+    so a late cleanup can never drop a newer task's lock, and a record that does
+    not name both its user and conversation (a pre-queue task) skips the release
+    instead of guessing which key it would have owned.
     """
-    try:
-        record = await get_task(redis, task_id) or {}
-    except Exception:  # noqa: BLE001 - no record means no owner to attribute
-        logger.warning('回收终态收尾读取任务记录失败（已忽略）: task_id=%s', task_id, exc_info=True)
-        return
+    if record is None:
+        try:
+            record = await get_task(redis, task_id) or {}
+        except Exception:  # noqa: BLE001 - no record means no owner to attribute
+            logger.warning('终态收尾读取任务记录失败（已忽略）: task_id=%s', task_id, exc_info=True)
+            return
     user_id = str(record.get('user_id') or 'anonymous')
     conversation_id = str((record.get('payload') or {}).get('conversation_id') or '')
     attempts = int(record.get('attempts') or 0)
-    try:
-        await release_session_if_owner(redis, user_id, conversation_id, task_id)
-    except Exception:  # noqa: BLE001 - a lock fault must not hide the terminal state
-        logger.warning('回收终态会话锁释放失败（已忽略）: task_id=%s', task_id, exc_info=True)
+    if record.get('user_id') and conversation_id:
+        try:
+            await release_session_if_owner(redis, str(record['user_id']),
+                                           conversation_id, task_id)
+        except Exception:  # noqa: BLE001 - a lock fault must not hide the terminal state
+            logger.warning('终态收尾会话锁释放失败（已忽略）: task_id=%s', task_id, exc_info=True)
+    else:
+        logger.info('任务记录未同时给出用户与会话，跳过队列会话锁释放: task_id=%s', task_id)
+    detail = {'status': status, 'attempts': attempts}
+    if reason_code:
+        detail['reason_code'] = reason_code
     await audit.record(redis, 'task.finished', actor=user_id, resource=task_id,
-                       status='failed', workspace=str(record.get('workspace') or 'default'),
-                       trace_id=str(record.get('trace_id') or ''),
-                       detail={'status': 'failed', 'attempts': attempts})
+                       status=status, workspace=str(record.get('workspace') or 'default'),
+                       trace_id=str(record.get('trace_id') or ''), detail=detail)
 
 
 async def reclaim_expired(redis, now: float | None = None) -> int:
@@ -295,7 +307,7 @@ async def reclaim_expired(redis, now: float | None = None) -> int:
             continue
         state = await requeue_or_fail(redis, task_id, '租约过期，任务已被其他 worker 回收')
         if state == 'failed':
-            await _finalize_reclaimed_failure(redis, task_id)
+            await finalize_terminal(redis, task_id, status='failed')
         reclaimed += 1
     return reclaimed
 
@@ -359,7 +371,9 @@ async def recover_running_tasks(redis, is_worker_alive) -> int:
     """On worker startup, requeue tasks whose worker died mid-run.
 
     A running task owned by another live worker is left untouched. Exhausted
-    attempts go to the dead-letter list instead of looping forever.
+    attempts go to the dead-letter list instead of looping forever, and are then
+    finalised like any other path that ends a task without a worker: owner-aware
+    lock release plus one ``task.finished`` audit.
     """
     recovered = 0
     for task_id in list(await redis.smembers(INDEX_KEY)):
@@ -391,6 +405,9 @@ async def recover_running_tasks(redis, is_worker_alive) -> int:
             record['finished_at'] = time.time()
             await save_task(redis, task_id, record)
             await redis.rpush(DEAD_KEY, task_id)
+            # The dead worker never reached its own terminal handling, so this
+            # process has to release the lock it left behind and write the audit.
+            await finalize_terminal(redis, task_id, status='failed', record=record)
         recovered += 1
     return recovered
 

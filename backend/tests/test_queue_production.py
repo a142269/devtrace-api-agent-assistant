@@ -370,6 +370,75 @@ class QueueUnitTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual([(row['status'], row['resource']) for row in finished],
                          [('failed', 'r7')])
 
+    # 3c. startup recovery of an exhausted task is finalised the same way -------
+    async def _dead_worker_task(self, tid, attempts):
+        await task_queue.try_claim_session(self.redis, 'alice', 'c1', tid)
+        await task_queue.enqueue(self.redis, tid, 'alice', '你好', 'c1')
+        # Drain the ready queue so a re-queue by the recovery is observable.
+        self.redis.lists.setdefault(task_queue.priority_queue_key('normal'), []).clear()
+        await task_queue.update_task(self.redis, tid, status='running',
+                                     worker_id='dead-worker', attempts=attempts)
+
+    @staticmethod
+    async def _dead(_redis, _worker):
+        return False
+
+    async def test_recover_exhausted_attempts_releases_lock_and_writes_one_audit(self):
+        await self._dead_worker_task('rc2', attempts=task_queue.MAX_ATTEMPTS - 1)
+        self.assertEqual(await task_queue.recover_running_tasks(self.redis, self._dead), 1)
+
+        record = await task_queue.get_task(self.redis, 'rc2')
+        self.assertEqual((record['status'], record['attempts']),
+                         ('failed', task_queue.MAX_ATTEMPTS))
+        self.assertIn('rc2', self.redis.lists[task_queue.DEAD_KEY])
+        # Dead-lettered, so it must not also sit in a ready queue.
+        self.assertNotIn('rc2', self.redis.lists.get(
+            task_queue.priority_queue_key('normal'), []))
+        self.assertIsNone(await self.redis.get(task_queue.session_key('alice', 'c1')))
+        self.assertTrue(await task_queue.try_claim_session(self.redis, 'alice', 'c1', 'rc3'))
+        finished = self.redis.events('task.finished')
+        self.assertEqual(len(finished), 1)
+        self.assertEqual((finished[0]['status'], finished[0]['resource'], finished[0]['actor']),
+                         ('failed', 'rc2', 'alice'))
+        detail = json.loads(finished[0]['detail'])
+        self.assertEqual(detail, {'attempts': task_queue.MAX_ATTEMPTS, 'status': 'failed'})
+        self.assertTrue(set(detail) <= audit.DETAIL_FIELDS)
+
+    async def test_recover_with_retry_budget_keeps_lock_and_writes_no_audit(self):
+        await self._dead_worker_task('rc1', attempts=0)
+        self.assertEqual(await task_queue.recover_running_tasks(self.redis, self._dead), 1)
+        record = await task_queue.get_task(self.redis, 'rc1')
+        self.assertEqual((record['status'], record['attempts']), ('queued', 1))
+        self.assertIn('rc1', self.redis.lists[task_queue.priority_queue_key('normal')])
+        self.assertEqual(await self.redis.get(task_queue.session_key('alice', 'c1')), 'rc1')
+        self.assertEqual(self.redis.events('task.finished'), [])
+
+    async def test_recover_exhausted_attempts_never_drops_a_newer_tasks_lock(self):
+        await self._dead_worker_task('rc4', attempts=task_queue.MAX_ATTEMPTS - 1)
+        # A newer request already owns the conversation when recovery catches up.
+        await self.redis.delete(task_queue.session_key('alice', 'c1'))
+        await task_queue.try_claim_session(self.redis, 'alice', 'c1', 'rc-live')
+        self.assertEqual(await task_queue.recover_running_tasks(self.redis, self._dead), 1)
+        self.assertEqual((await task_queue.get_task(self.redis, 'rc4'))['status'], 'failed')
+        self.assertEqual(await self.redis.get(task_queue.session_key('alice', 'c1')), 'rc-live')
+        self.assertEqual(len(self.redis.events('task.finished')), 1)
+
+    async def test_recover_finalize_lock_fault_is_logged_and_still_audits(self):
+        from redis.exceptions import RedisError
+
+        async def broken_owner_release(*_args, **_kwargs):
+            raise RedisError('connection reset')
+
+        await self._dead_worker_task('rc5', attempts=task_queue.MAX_ATTEMPTS - 1)
+        with patch.object(task_queue, 'release_session_if_owner', broken_owner_release), \
+                self.assertLogs('developer.task_queue', level='WARNING') as captured:
+            self.assertEqual(await task_queue.recover_running_tasks(self.redis, self._dead), 1)
+        self.assertTrue(any('会话锁释放失败' in line for line in captured.output))
+        self.assertEqual((await task_queue.get_task(self.redis, 'rc5'))['status'], 'failed')
+        self.assertEqual([(row['status'], row['resource'])
+                          for row in self.redis.events('task.finished')],
+                         [('failed', 'rc5')])
+
     async def test_lease_seconds_floor_and_default(self):
         for raw, expected in ((None, 90), ('45', 45), ('5', 30), ('nope', 90)):
             env = {'DEVTRACE_TASK_LEASE_SECONDS': raw} if raw is not None else {}
