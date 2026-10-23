@@ -163,6 +163,12 @@ async def _mark_interrupted(redis, task_id: str, record: dict) -> dict:
     current['reason'] = '执行进程没有按时更新心跳；任务已标记为中断，可用同一会话发送“继续”重试'
     await redis.setex(_task_key(task_id), redis_ttl_seconds(), json.dumps(current))
     await redis.srem(TASK_INDEX_KEY, task_id)
+    # A queued task also holds `developer:session-task:*`, and the worker that
+    # would have released it is gone: close that book here or the conversation
+    # stays blocked for the rest of the 900s lock TTL with no terminal audit.
+    # In-process stream records carry no conversation, so the release is skipped.
+    await task_queue.finalize_terminal(redis, task_id, status='interrupted',
+                                       record=current, reason_code='stale_heartbeat')
     return current
 
 
@@ -171,7 +177,8 @@ async def reconcile_stale_tasks(redis) -> int:
 
     Safe with multiple replicas sharing Redis: a task owned by another live worker
     (its heartbeat key exists) is left alone, while tasks from this worker or from
-    a worker whose TTL expired are marked interrupted.
+    a worker whose TTL expired are marked interrupted. Marking one interrupted also
+    releases the queue session lock it owned and writes its terminal audit.
     """
     members = getattr(redis, 'smembers', None)
     if members is None:
