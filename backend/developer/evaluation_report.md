@@ -554,12 +554,12 @@ Agent 新增 `search_public_docs` 工具与 `public_api` 计划路径；模型�
   | 04:07:40.766 | worker-2（`d10e9f831c1a-1-2876e1`，容器 `devtrace-verify-worker-2`）置 `running`，`attempts=0`，`run_id=null`，租约到 04:08:10.741 |
   | 04:07:41.984 | `docker kill devtrace-verify-worker-2`：`State.ExitCode=137`、`OOMKilled=false`（= SIGKILL），**落在任务进入 running 后 1.22 秒** |
   | 04:08:10.741 | 租约到期 |
-  | 04:08:13.860 | 幸存 worker-1（`6e5a960e2f5b-1-79bc71`）日志 `reclaimed 1 task(s) with expired leases`（kill 后 **32.9 秒**） |
+  | 04:08:13.860 | 幸存 worker-1（`6e5a960e2f5b-1-79bc71`）日志 `reclaimed 1 task(s) with expired leases`（kill 后 **32.9 秒**；分母取探针记录的 `killed_at=1792728461` 秒级精度，若改用 Docker 容器退出时间戳 04:07:41.984 则是 **31.88 秒**，租约到期后 **3.12 秒**） |
   | 04:08:13.907 | 记录 → `queued`，`attempts` **0 → 1**，进延迟重试队列 |
   | 04:08:18.910 | 提升后被 worker-1 认领，重新 `running`，新租约 |
-  | 04:08:30.323 | 终态 `waiting`，`run_id=5c258006-4297-4b73-817f-34abc59e6a69`，重跑耗时 **11.43 秒** |
+  | 04:08:30.323 | 终态 `waiting`，`run_id=5c258006-4297-4b73-817f-34abc59e6a69`，重跑耗时 **11.41 秒** |
 
-- **"任务确实在执行中"的证据**：kill 时记录是 `running`、`attempts=0`、`run_id=null`（还没有任何运行记录）、租约有效；同一条消息由幸存 worker 重跑用了 11.43 秒，而被杀那次只跑过 1.22 秒。不是"刚入队还没开始"或"已经跑完"。
+- **"任务确实在执行中"的证据**：kill 时记录是 `running`、`attempts=0`、`run_id=null`（还没有任何运行记录）、租约有效；同一条消息由幸存 worker 重跑用了 11.41 秒，而被杀那次只跑过 1.22 秒。不是"刚入队还没开始"或"已经跑完"。
 - **客户端全程连着**（队列 relay 路径），SSE 相对发送时刻：`event: started` +0.39s → `: heartbeat` +15.45s、+30.51s（**跨过 kill 与回收窗口**，连接没断也没静默）→ timeline 事件 +39.74s…+40.74s（plan/approval/selection/action/observation/status）→ `: heartbeat` +45.56s → `event: complete` + `<eof>` +49.97s。客户端拿到的是恢复后的结果，没有挂死。
 - **卡片要求的断言逐条核对**（`04_verify.json` / `09_verify_after_resend.json`）：终态唯一 = `waiting`；`task.finished` 审计**恰好 1 条**（`task_finished_count=1`，statuses `["waiting"]`），该任务的审计事件只有 `task.enqueued` + `task.finished`；`run_id` 唯一且运行记录存在、归属用户匹配；`attempts` 0 → 1（合理增长，没有无谓重跑）；`error=null`、`cancel_requested=false`（**没有**因为客户端还连着而被误判成取消）；不在死信队列、不在延迟队列；high/normal/low 三条队列长度全 0；会话锁已释放（`session_lock_exists=false`、`ttl=-2`）。
 - **终态是 `waiting` 而不是 `completed`，说明清楚**：`api/worker.py` 的映射是 `status = 'waiting' if (result.get('plan') or {}).get('status') == 'waiting' else 'completed'`。这一轮计划提议 `search_api_docs → get_request_trace → inspect_key_scope`，只执行完 s1 就把下一步交回用户，计划状态是 `waiting`。`waiting` 是队列的**第三个终态**：worker 同样写 `finished_at`、发 `task.finished`、释放会话锁，relay 同样发 `event: complete`。所以"唯一终态、不挂死、锁已释放"这些断言成立，但**不能说它跑成了 `completed`**——卡片期望的是 `completed` 或明确的 `failed`，实际拿到的是第三种合法终态。
