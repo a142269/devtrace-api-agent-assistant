@@ -742,7 +742,10 @@ async def _queued_stream(req: 'DeveloperChatRequest', user_id: str,
                                  _redact(req.message), conversation_id, workspace=workspace,
                                  trace_id=trace_id)
     except Exception:
-        await task_queue.release_session(_developer.redis, user_id, conversation_id)
+        # The task id is known here, so the rollback must only drop the lock this
+        # request actually claimed.
+        await task_queue.release_session_if_owner(
+            _developer.redis, user_id, conversation_id, task_id)
         raise
     await audit.record(_developer.redis, 'task.enqueued', actor=user_id, resource=task_id,
                        status='queued', workspace=workspace, trace_id=trace_id,

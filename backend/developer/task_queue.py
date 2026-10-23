@@ -148,8 +148,33 @@ async def try_claim_session(redis, user_id: str, conversation_id: str,
     return bool(await redis.set(session_key(user_id, conversation_id), task_id, nx=True, ex=ttl))
 
 
+# Compare-and-delete, run atomically by Redis: the lock value is the task id
+# written by try_claim_session, so a late cleanup can never drop the lock that a
+# newer task already claimed for the same conversation.
+RELEASE_IF_OWNER_LUA = ("if redis.call('GET',KEYS[1]) == ARGV[1] "
+                        "then return redis.call('DEL',KEYS[1]) else return 0 end")
+
+
 async def release_session(redis, user_id: str, conversation_id: str) -> None:
+    """Drop the session lock without checking who holds it.
+
+    The unconditional primitive, kept for callers that carry no task id (operator
+    cleanup, tests). Every task terminal path must use `release_session_if_owner`
+    instead, otherwise a delayed release can delete a live task's lock.
+    """
     await redis.delete(session_key(user_id, conversation_id))
+
+
+async def release_session_if_owner(redis, user_id: str, conversation_id: str,
+                                   task_id: str) -> int:
+    """Release the session lock only while `task_id` still owns it.
+
+    Returns 1 when this task deleted its own lock and 0 when the lock is already
+    gone or held by another task; another task's lock is never touched.
+    """
+    deleted = await redis.eval(RELEASE_IF_OWNER_LUA, 1,
+                               session_key(user_id, conversation_id), task_id)
+    return int(deleted or 0)
 
 
 async def request_cancel(redis, task_id: str) -> None:

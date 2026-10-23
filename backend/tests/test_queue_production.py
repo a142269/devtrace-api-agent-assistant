@@ -47,8 +47,17 @@ class ProdRedis:
     async def expire(self, key, _ttl):
         return True
 
-    async def eval(self, *_args):
-        return 1
+    async def eval(self, _script, _numkeys, key, *args):
+        """Emulate the session-lock compare-and-delete script.
+
+        Only the compare-and-delete form passes an argv; the limiter's INCR
+        script reaches this fake with no value and must not be treated as a
+        lock release.
+        """
+        if args and self.values.get(key) == args[0]:
+            self.values.pop(key, None)
+            return 1
+        return 0
 
     def lock(self, key, **_kwargs):
         redis = self

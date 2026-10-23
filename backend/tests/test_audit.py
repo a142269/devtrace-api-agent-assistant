@@ -29,8 +29,12 @@ class StreamRedis:
         self.streams = {}
         self._seq = 0
 
-    async def eval(self, *_args):
-        return 1
+    async def eval(self, _script, _numkeys, key, *args):
+        """Emulate the session-lock compare-and-delete script (only it passes argv)."""
+        if args and self.values.get(key) == args[0]:
+            self.values.pop(key, None)
+            return 1
+        return 0
 
     def lock(self, key, **_kwargs):
         redis = self

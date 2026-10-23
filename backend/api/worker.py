@@ -68,7 +68,7 @@ async def process_one(assistant, redis, task_id: str) -> None:
     audit.workspace_var.set(workspace if record.get('workspace') else '')
     if record.get('cancel_requested'):
         await task_queue.update_task(redis, task_id, status='cancelled', finished_at=time.time())
-        await task_queue.release_session(redis, user_id, conversation_id)
+        await task_queue.release_session_if_owner(redis, user_id, conversation_id, task_id)
         await _audit_finished(redis, task_id, user_id, 'cancelled', attempts, workspace, trace_id)
         return
     await task_queue.update_task(
@@ -120,7 +120,9 @@ async def process_one(assistant, redis, task_id: str) -> None:
         await asyncio.gather(renew_task, return_exceptions=True)
         event_sink.reset(token)
         if terminal:
-            await task_queue.release_session(redis, user_id, conversation_id)
+            # Owner-aware: this worker may finish long after a newer task on the
+            # same conversation already re-claimed the lock.
+            await task_queue.release_session_if_owner(redis, user_id, conversation_id, task_id)
 
 
 async def run() -> None:
