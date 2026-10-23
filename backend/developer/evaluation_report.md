@@ -595,3 +595,61 @@ Agent 新增 `search_public_docs` 工具与 `public_api` 计划路径；模型�
 7. 全部为小样本、单 provider、单机演示级验证，**不构成生产就绪结论**：没有多副本 API、没有真实故障切换演练、没有 WORM 审计、没有 TLS 与身份服务。
 8. P13 候选：`release_session` 改 Lua 比较后删（锁值已存 `task_id`）+ 单测；`reclaim_expired`/`requeue_or_fail` 的终结路径补 `release_session` 与 `task.finished` 审计；连环 kill 与"kill 落在写运行记录瞬间"的分相演练；队列 relay 的 `end` 事件延迟收敛（本轮终态到 `<eof>` 之间还有一次 15 秒心跳间隔）；限流器健康检查/熔断；按 IP/租户分层配额；保留 CLI 的定时触发；多 provider 评测。
 
+## 会话锁归属与维护循环终态（2026-10-23，P13）
+
+范围：只修 P12 取证到的两个会话锁缺口，基线 `7e58feb`，代码提交 `8f437ca`（owner-aware 释放）与 `d149689`（回收终态收尾）。**本轮零模型调用**，没有起 `kill -9` 复跑，官方 holdout、评分口径、案例、标签、提示词、限流器、MCP、JWT、workspace、前端均未改动。
+
+### 1. 缺口二：`release_session` 无条件 `DEL` → 按持有者比较后删
+
+- **根因**：队列侧会话锁 `developer:session-task:<sha256(user\0conversation)>` 用 `SET NX EX 900` 认领，**锁值本身就是 `task_id`**，但释放一直是无条件 `DEL`。task-A 的清理若晚于 task-B 认领同一会话（终态处理延迟、回收后重排队、客户端重试），A 的 `release_session` 会把 B 的锁删掉——P12 的只读探针已复现这条：`held: true / owner task-B` → `held: false`，紧接着 task-C `try_claim_session` 返回 **true**，同一会话出现两个并发执行的任务。
+- **修法**：`developer/task_queue.py` 新增 `RELEASE_IF_OWNER_LUA` 与 `release_session_if_owner()`（`backend/developer/task_queue.py:172`），由 Redis 原子执行 `if redis.call('GET',KEYS[1]) == ARGV[1] then return redis.call('DEL',KEYS[1]) else return 0 end`，返回值归一为 `int`（1 = 本任务删掉了自己的锁，0 = 锁已不存在或属于别人），**绝不触碰其他任务的锁**。
+- **保留原语与逐调用点判定**：`release_session()` 保留（`backend/developer/task_queue.py:162`），docstring 写明它是"不携带 task_id 的调用方（运维清理、测试）用的无条件原语，任何任务终态路径必须改用 owner-aware 版本"。生产代码里的三个终态释放点**全部替换**：`api/worker.py` 启动前取消分支与 `finally`、`api/main.py` 的 `_queued_stream` 入队回滚；替换后 `release_session` 在生产路径**已无调用点**，只剩原语定义与单测夹具。
+- **边界**：同步 `/developer/chat` 用的是**另一把**锁 `developer:session-lock:<sha256>`（redis-py `lock()`，本身带持有者语义），P13 未动；本轮改动面只有 `developer:session-task:*`。
+- **测试**（新增 `tests/test_session_lock_ownership.py`，12 项 + 2 个 subtest）：owner 释放返回 1 且锁消失、非 owner 返回 0 且锁值与 TTL 都不变、锁已不存在返回 0；一条脚本形状断言用 spy 替换 `redis.eval`，核对送进 Redis 的正是 `RELEASE_IF_OWNER_LUA`、`numkeys=1`、key 为 `session_key(user, conversation)`、argv 为 `task_id`，并检查脚本内含 `redis.call('GET',KEYS[1]) == ARGV[1]`（防止"逻辑看着对、脚本发错"）；端到端竞态用 `TakeoverAssistant` 在 A 执行期间把同一会话重新认领给 B，A 的终态释放没有删掉 B 的锁，随后 task-C `try_claim_session` 返回 **false**（必须等 B 释放）；三条终态路径各以 subTest 覆盖"别人持锁时不动"与"自己持锁时仍能释放"；`release_session` 的无条件语义单独保留一条断言，防止原语被悄悄改宽。
+- **负向对照**：`test_blind_primitive_clobbers_the_newer_lock_the_owner_aware_one_does_not` 在同一场景里证明无条件 `release_session` 确实删掉 B 的锁，而 owner-aware 版本不删——这条决定性地说明修复改变了结果，而不是测试被写宽。
+- **配套 fake 修正**：`ProdRedis.eval`（`test_queue_production.py`）、`QueueRedis.eval`（`test_task_queue.py`）、`StreamRedis.eval`（`test_audit.py`）原本只是 `return 1` 的桩；换上 owner-aware 释放后必须**忠实模拟比较删除**，否则"锁已释放"只是桩的产物。实现成 `if args and self.values.get(key) == args[0]` 才删——`if args` 守卫是必需的：限流器的 INCR 脚本不传 argv，无条件索引 `args[0]` 会让 `test_started_event_carries_trace_id` 抛 `IndexError`。
+
+### 2. 缺口一：维护循环耗尽重试后的僵尸锁与缺失终态
+
+- **根因**：`reclaim_expired()` 走 `requeue_or_fail()` 撞到 `MAX_ATTEMPTS=2` 时，只把记录置 `failed` 并塞进死信；会话锁仍挂在该 task 名下，而且这条终结路径**从来不写 `task.finished`**（`task_queue.py` 原本零审计调用，`task.finished` 只在 `api/main.py` 与 `api/worker.py` 写）。后果：该会话在整个 900 秒锁 TTL 内不可用，且审计流里这条任务凭空消失。
+- **修法**：`reclaim_expired` 取得 `state = await requeue_or_fail(...)`，`state == 'failed'` 时调用 `_finalize_reclaimed_failure()`（`backend/developer/task_queue.py:237`）：读任务记录 → 用记录里的 `task_id` 做 **owner-aware** 释放（因此这条修复不可能删别人的锁）→ 写**恰好一条** `task.finished` 审计（`status=failed`，`detail={'status': 'failed', 'attempts': N}`，全部落在 `audit.DETAIL_FIELDS` 白名单内，不含消息正文与工具结果，`workspace`/`trace_id` 取自记录）。
+- **尽力而为的取舍**：记录读取失败 → warning 后返回；锁释放失败 → warning 后**继续写审计**（两段各自独立 `try`——最初草稿把三步塞进同一个 `try`，一个锁故障会顺带吞掉终态审计，已改掉）；`audit.record()` 本身不抛。设计定位与其余审计一致：best-effort，Redis 故障不阻断主流程。
+- **为什么不会与 worker 重复写审计**：这条只在"租约过期、原 worker 已死"的分支触发，死掉的 worker 从未跑到自己的终态处理；worker 正常失败路径照旧由 `api/worker.py` 写审计并释放锁。有专门用例断言"worker 已终结的任务被 reclaim 扫到不会二次审计"。
+- **测试**（`tests/test_queue_production.py` 新增 6 项）：连续两次崩溃——第一次只重排队、**不写终态审计**、锁仍属 task-A（任务还要重跑，这是正确行为）；第二次进死信 → 锁被 owner-aware 释放、`task.finished` **恰好 1 条**、`status=failed` 且 `attempts` 进 detail；`reclaim_expired` **绝不删掉别的任务现在持有的锁**；租约仍有效的 `running` 任务不被终结也不写审计；worker 正常终态后 reclaim 不二次审计；把 `release_session_if_owner` patch 成抛异常时用 `assertLogs('developer.task_queue', level='WARNING')` 断言有 WARNING 且审计仍然写入。实现局限如实说明：fake Redis 没有 TTL，两轮崩溃之间要手工 `delete(RECLAIM_PREFIX + 'r2')` 清掉回收互斥锁，这是测试夹具的限制，不是被测语义。
+
+### 3. 真实 Redis 上的 Lua 取证
+
+单元测试跑的是 fake，"这段 Lua 真能被 Redis 执行"必须单独取证。用卡片允许的 `devtrace-verify` 栈（工作树源码经只读 bind overlay 挂载、容器 Python 3.12.15）跑只读探针 `p13_lua_probe.py`（工作区文件，**不入库**），产物 `.p13_lua_probe.json`：
+
+- 只碰合成 key（`session_key('p13-lua-probe-user', 'p13-lua-probe-conversation')`），先 `EXISTS` 确认没被真实任务占用，再 `SET NX EX 60` 写入合成持有者 `t-A`（60 秒是探针自拟的短 TTL，生产是 900）。
+- 非持有者 `EVAL(RELEASE_IF_OWNER_LUA, 1, key, 't-B')` → **0**，值仍是 `t-A`，TTL 仍是 60（没被删也没被改期）；持有者 → **1**，key 消失；key 已不存在时再调用 → **0**（重复释放幂等、不报错）。
+- 直接调用生产函数 `task_queue.release_session_if_owner`：非持有者返回 0 且锁保留、持有者返回 1 且锁消失，返回类型是 `int`。
+- 收尾：探针 key 已删除；`developer:session-task:*` 的 **key 数量**前后都是 0（只数数量、不读值，因此不会打印任何真实会话标识），应用侧锁未被触碰；连接串只从容器环境读取，未打印。整轮重复执行一次，结论一致。
+- **明确没有做**：没有往真实队列注入合成 `running` 任务去端到端跑 `reclaim_expired`——那会污染应用的索引与优先级列表，并有被 worker 真的执行、从而产生模型调用的风险。第 2 节的回收终态语义只有 fake Redis 证据，真实栈上**未验证**。
+- 栈收尾 `docker compose down`（未加 `-v`，三个数据卷保留），未触碰其他项目的容器。
+
+### 4. 变异对照
+
+- **变异 A**：把 `release_session_if_owner` 实现换成盲删（`delete(session_key(...))` 后 `return 1`）→ `test_session_lock_ownership.py` **9 项失败**，其中包括 `api/main.py` 的入队回滚点；还原后全绿。
+- **变异 B**：把 `reclaim_expired` 里的 `if state == 'failed': await _finalize_reclaimed_failure(...)` 换成 `pass` → **恰好 2 项失败**（`'r2' is not None` 即锁没释放、以及缺失的那条 `task.finished`），而"第一次崩溃不写终态审计"与"绝不删别人的锁"两项**正确地保持绿色**，说明它们不是被这条修复顺带带过去的。
+- 两次变异都用字节级备份 + `cmp` 校验还原，之后重跑整表。
+
+### 5. 回归与静态检查
+
+- 整表 **337 → 355 项通过 + 217 → 219 个 subtest**（新增 `tests/test_session_lock_ownership.py` 12 项 + 2 个 subtest、`tests/test_queue_production.py` 6 项），两个口径都全绿：不带 `PYTHONUTF8=1` **355 passed / 106.00s**，带 **355 passed / 118.13s**（Windows 本机 Python 3.10.18）。旧用例无一改动、无一失败。墙钟比 P12 的 54–71 秒翻倍，本轮做了排查而不是默认接受：`--durations=8` 显示最慢的 8 项里前 7 项全是既有的 `tests/test_stream_limits.py`（7.25–7.80 秒/项）、第 8 项是既有的 `tests/test_rate_limit_degradation.py`（4.15 秒），本轮新增用例一项都不在其中，判定为宿主负载而非新测试引入的等待；三次运行（含变异还原后的复跑，另一次 **355 passed / 109.67s**）报出的通过数完全一致。
+- CI Ruff `--select F` 清单 60 → **61 个文件**（新增 `tests/test_session_lock_ownership.py`），本地按 CI 同参数运行 `All checks passed!`。
+- 规则模式 holdout 作为回归重跑：**40/40**（conflict 3/3、auth 5/5、quota 3/3、ambiguity 3/3、webhook 4/4、combo 5/5、injection 7/7、anomaly 3/3、negative 2/2、multiturn 3/3、public_api 2/2；`by_decision_mode` 只有 `rules`，`by_batch` 19+21），退出码 0，输出写到工作区根目录 `.p13_rules.json`，**仓库内官方报告未被覆盖**；零模型调用。这只是回归——**官方模型模式 37/40 与 base 名补充 39/40 两份结论本轮未重跑、未改动**。
+- 范围证据：`git diff --name-only 7e58feb HEAD` 只有 8 个文件（`.github/workflows/ci.yml`、`backend/api/main.py`、`backend/api/worker.py`、`backend/developer/task_queue.py`、`backend/tests/test_audit.py`、`test_queue_production.py`、`test_task_queue.py`、新增 `test_session_lock_ownership.py`）；`developer/planner.py`、`prompts.py`、`assistant.py`、`memory/`、`mcp/`、`frontend/`、限流器与所有 `eval_*.json` 官方报告的 diff 均为空。
+
+### 6. 流程硬规则（写进交接文档）
+
+**任何以 `docker kill` / 崩溃取证为目的的验证，必须在 `docker compose down` 之前把日志导出并结构化落盘**（容器名、时间戳、计数、`ExitCode`/`OOMKilled` 等原始字段都要有可读文件），因为 P12 的 7 次模型调用计数只能靠当时的容器日志统计，`down` 之后**永久无法复核**。这条不是建议：崩溃取证的可复核性完全取决于 down 之前的那一次导出。
+
+### 7. 未验证 / 风险
+
+1. **真实栈上的连环 kill / 双 worker 崩溃回收未复跑**（卡片明确禁止本轮做 kill 演练）。回收终态路径只有 fake Redis 证据，第 3 节只覆盖了 Lua 原语本身。
+2. `test_api_security.py`、`test_workspace.py`、`test_stream_cancellation.py` 里的 fake `eval` 桩仍是 `return 1`，不模拟比较删除。它们驱动的代码路径不经过会话锁释放，所以本轮结论不受影响；但**如果以后让这些 fake 也走 owner-aware 释放，必须先换成忠实模拟**，否则"锁释放成功"是桩给的假证据。
+3. `release_session_if_owner` 返回 0 无法区分"锁已消失"与"锁属于别人"。调用方只需保证"没碰别人的锁"，因此够用；若将来要据此判断"会话里是否还有活跃任务"，需要额外读取。
+4. Lua 脚本硬编码单 key 单参数（`KEYS[1]`/`ARGV[1]`），换 Redis Cluster 或改用 `register_script`/`EVALSHA` 时需重审。
+5. 同类"僵尸锁"形状还有两处**按范围纪律未修、只记录等裁定**：`task_queue.recover_running_tasks()`（worker 启动恢复）与 `api/main.py` 的 `reconcile_stale_tasks` / `_mark_interrupted`——它们标记中断任务时的锁处理本轮没有改动，也没有为其编写用例。
+6. 全部仍是演示级、单 Redis、小样本验证，**不构成生产就绪结论**：没有多副本 API、没有真实故障切换、没有 WORM 审计、没有 TLS 与身份服务。
