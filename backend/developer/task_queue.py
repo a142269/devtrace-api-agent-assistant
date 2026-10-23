@@ -6,12 +6,16 @@ allows retries / dead-letter handling for transient failures.
 """
 import hashlib
 import json
+import logging
 import os
 import re
 import time
 import uuid
 
+from developer import audit
 from developer.ttl import redis_ttl_seconds
+
+logger = logging.getLogger(__name__)
 
 QUEUE_KEY = 'developer:tasks:queue'          # legacy queue, drained last
 DEAD_KEY = 'developer:tasks:dead'
@@ -230,11 +234,45 @@ async def promote_delayed(redis, now: float | None = None) -> int:
     return promoted
 
 
+async def _finalize_reclaimed_failure(redis, task_id: str) -> None:
+    """Close the book a reclaimed task leaves behind when it dead-letters.
+
+    The worker that died never reached its own terminal handling, so the
+    maintenance loop has to do two things it would otherwise skip: release the
+    session lock this task owned, and write the single ``task.finished`` audit.
+    Without them the conversation stays blocked for the full 900s lock TTL and
+    the terminal state is invisible in the audit stream.
+
+    Best-effort by design: neither the lock release nor the audit may break the
+    reclaim cycle, so faults are logged and swallowed. The worker's own failure
+    path already writes its audit and releases its lock; this only runs for the
+    lease-expiry path, where that code never executed, so no event is doubled.
+    """
+    try:
+        record = await get_task(redis, task_id) or {}
+    except Exception:  # noqa: BLE001 - no record means no owner to attribute
+        logger.warning('回收终态收尾读取任务记录失败（已忽略）: task_id=%s', task_id, exc_info=True)
+        return
+    user_id = str(record.get('user_id') or 'anonymous')
+    conversation_id = str((record.get('payload') or {}).get('conversation_id') or '')
+    attempts = int(record.get('attempts') or 0)
+    try:
+        await release_session_if_owner(redis, user_id, conversation_id, task_id)
+    except Exception:  # noqa: BLE001 - a lock fault must not hide the terminal state
+        logger.warning('回收终态会话锁释放失败（已忽略）: task_id=%s', task_id, exc_info=True)
+    await audit.record(redis, 'task.finished', actor=user_id, resource=task_id,
+                       status='failed', workspace=str(record.get('workspace') or 'default'),
+                       trace_id=str(record.get('trace_id') or ''),
+                       detail={'status': 'failed', 'attempts': attempts})
+
+
 async def reclaim_expired(redis, now: float | None = None) -> int:
     """Requeue running tasks whose lease lapsed (the owning worker crashed).
 
     Tasks without a lease field keep the pre-P3 startup-recovery semantics, and
     a short ``SET NX`` mutex guarantees only one worker requeues a given task.
+    A reclamation that exhausts the attempt budget is finalised here instead of
+    by a worker, because the worker that owned the task is gone.
     """
     current = time.time() if now is None else now
     reclaimed = 0
@@ -255,7 +293,9 @@ async def reclaim_expired(redis, now: float | None = None) -> int:
                 or not isinstance(lease_until, (int, float)) or lease_until > current):
             await redis.delete(mutex)
             continue
-        await requeue_or_fail(redis, task_id, '租约过期，任务已被其他 worker 回收')
+        state = await requeue_or_fail(redis, task_id, '租约过期，任务已被其他 worker 回收')
+        if state == 'failed':
+            await _finalize_reclaimed_failure(redis, task_id)
         reclaimed += 1
     return reclaimed
 

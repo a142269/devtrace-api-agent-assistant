@@ -280,6 +280,96 @@ class QueueUnitTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(await task_queue.reclaim_expired(self.redis), 0)
         self.assertEqual((await task_queue.get_task(self.redis, 't7'))['status'], 'running')
 
+    # 3b. reclamation that exhausts its attempts is finalised by the loop ------
+    async def _crashed_task(self, tid, lease_id='ghost'):
+        await task_queue.try_claim_session(self.redis, 'alice', 'c1', tid)
+        await task_queue.enqueue(self.redis, tid, 'alice', '你好', 'c1')
+        await task_queue.update_task(self.redis, tid, status='running',
+                                     lease_id=lease_id, lease_until=time.time() - 1)
+
+    async def test_first_crash_reclaims_without_terminal_bookkeeping(self):
+        await self._crashed_task('r1')
+        self.assertEqual(await task_queue.reclaim_expired(self.redis), 1)
+        record = await task_queue.get_task(self.redis, 'r1')
+        self.assertEqual((record['status'], record['attempts']), ('queued', 1))
+        # A retry is still pending, so the conversation lock stays held and no
+        # terminal audit is written.
+        self.assertEqual(await self.redis.get(task_queue.session_key('alice', 'c1')), 'r1')
+        self.assertEqual(self.redis.events('task.finished'), [])
+
+    async def test_second_crash_releases_lock_and_writes_exactly_one_audit(self):
+        await self._crashed_task('r2')
+        self.assertEqual(await task_queue.reclaim_expired(self.redis), 1)
+        # The fake redis has no TTL, so drop the 30s reclaim mutex the way Redis
+        # would expire it before the task is claimed and dies a second time.
+        await self.redis.delete(f'{task_queue.RECLAIM_PREFIX}r2')
+        await task_queue.update_task(self.redis, 'r2', status='running',
+                                     lease_id='ghost-2', lease_until=time.time() - 1)
+        self.assertEqual(await task_queue.reclaim_expired(self.redis), 1)
+
+        record = await task_queue.get_task(self.redis, 'r2')
+        self.assertEqual((record['status'], record['attempts']), ('failed', 2))
+        self.assertIn('r2', self.redis.lists[task_queue.DEAD_KEY])
+        # The zombie conversation lock is gone, so a new request can claim it.
+        self.assertIsNone(await self.redis.get(task_queue.session_key('alice', 'c1')))
+        self.assertTrue(await task_queue.try_claim_session(self.redis, 'alice', 'c1', 'r3'))
+        finished = self.redis.events('task.finished')
+        self.assertEqual(len(finished), 1)
+        self.assertEqual((finished[0]['status'], finished[0]['resource']), ('failed', 'r2'))
+        self.assertEqual(finished[0]['actor'], 'alice')
+        detail = json.loads(finished[0]['detail'])
+        self.assertEqual(detail, {'attempts': 2, 'status': 'failed'})
+        self.assertTrue(set(detail) <= audit.DETAIL_FIELDS)
+
+    async def test_reclaim_never_drops_a_lock_another_task_now_owns(self):
+        await self._crashed_task('r4')
+        await task_queue.reclaim_expired(self.redis)
+        await self.redis.delete(f'{task_queue.RECLAIM_PREFIX}r4')
+        # A newer request took the conversation over before the final reclamation.
+        await self.redis.delete(task_queue.session_key('alice', 'c1'))
+        await task_queue.try_claim_session(self.redis, 'alice', 'c1', 'r-live')
+        await task_queue.update_task(self.redis, 'r4', status='running',
+                                     lease_id='ghost-2', lease_until=time.time() - 1)
+        await task_queue.reclaim_expired(self.redis)
+        record = await task_queue.get_task(self.redis, 'r4')
+        self.assertEqual(record['status'], 'failed')
+        self.assertEqual(await self.redis.get(task_queue.session_key('alice', 'c1')), 'r-live')
+
+    async def test_live_lease_writes_no_terminal_audit_and_keeps_the_lock(self):
+        await self._crashed_task('r5')
+        await task_queue.update_task(self.redis, 'r5', lease_until=time.time() + 60)
+        self.assertEqual(await task_queue.reclaim_expired(self.redis), 0)
+        self.assertEqual(self.redis.events('task.finished'), [])
+        self.assertEqual(await self.redis.get(task_queue.session_key('alice', 'c1')), 'r5')
+
+    async def test_worker_terminal_path_is_not_double_audited_by_reclaim(self):
+        await task_queue.enqueue(self.redis, 'r6', 'alice', '你好', 'c1')
+        await api_worker.process_one(SuccessAssistant(), self.redis, 'r6')
+        self.assertEqual(len(self.redis.events('task.finished')), 1)
+        self.assertEqual(await task_queue.reclaim_expired(self.redis), 0)
+        self.assertEqual(len(self.redis.events('task.finished')), 1)
+
+    async def test_reclaim_finalize_lock_fault_is_logged_and_still_audits(self):
+        from redis.exceptions import RedisError
+
+        async def broken_owner_release(*_args, **_kwargs):
+            raise RedisError('connection reset')
+
+        await self._crashed_task('r7')
+        await task_queue.reclaim_expired(self.redis)
+        await self.redis.delete(f'{task_queue.RECLAIM_PREFIX}r7')
+        await task_queue.update_task(self.redis, 'r7', status='running',
+                                     lease_id='ghost-2', lease_until=time.time() - 1)
+        with patch.object(task_queue, 'release_session_if_owner', broken_owner_release), \
+                self.assertLogs('developer.task_queue', level='WARNING') as captured:
+            self.assertEqual(await task_queue.reclaim_expired(self.redis), 1)
+        self.assertTrue(any('会话锁释放失败' in line for line in captured.output))
+        # The dead-letter state and its audit survive the lock fault.
+        self.assertEqual((await task_queue.get_task(self.redis, 'r7'))['status'], 'failed')
+        finished = self.redis.events('task.finished')
+        self.assertEqual([(row['status'], row['resource']) for row in finished],
+                         [('failed', 'r7')])
+
     async def test_lease_seconds_floor_and_default(self):
         for raw, expected in ((None, 90), ('45', 45), ('5', 30), ('nope', 90)):
             env = {'DEVTRACE_TASK_LEASE_SECONDS': raw} if raw is not None else {}
