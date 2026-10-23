@@ -8,7 +8,7 @@
 
 Agent 从会话记忆和历史证据开始，生成诊断计划，调用文档、请求记录、密钥权限或 Webhook 工具，并将每次观察写入状态。模型可以在服务端的证据和依赖约束内改变行动顺序；服务端负责工具白名单、参数来源、工单授权、脱敏与失败降级。
 
-> **评审/面试入口（5 分钟）**：先看 [项目速览 PORTFOLIO.md](PORTFOLIO.md) → [架构说明](docs/ARCHITECTURE.md) → [5 分钟演示脚本](docs/DEMO.md)。最终验收与限制见 [最终验收](docs/FINAL_REVIEW.md)（已入库）；发布 tag：`demo-2026-10-23.1`。
+> **项目速览（5 分钟）**：先看 [项目速览 PORTFOLIO.md](PORTFOLIO.md) → [架构说明](docs/ARCHITECTURE.md) → [5 分钟演示脚本](docs/DEMO.md)。最终验收与限制见 [最终验收](docs/FINAL_REVIEW.md)（已入库）；发布 tag：`demo-2026-10-23.1`。
 
 ### 技术亮点
 

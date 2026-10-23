@@ -112,7 +112,7 @@ P8 用已批准的预算补齐了两个评测空白：
 ## 7. 复现命令
 
 ```powershell
-$root = "D:\echomind\EchoMind所有代码+详细文档+简历"
+$root = "<workspace-root>"
 $py = "$root\.dsh-venv\Scripts\python.exe"
 $env:PYTHONPATH = "$root\.dsh-venv\Lib\site-packages"
 $env:PYTHONUTF8 = "1"

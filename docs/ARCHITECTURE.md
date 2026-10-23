@@ -1,6 +1,6 @@
 # DevTrace 架构说明
 
-> 面向评审/面试的 5 分钟架构导读。详细模块对照见 F智能体核心模块说明](../backend/developer/智能体核心模块说明.md)。
+> 5 分钟项目架构导读。详细模块对照见 [智能体核心模块说明](../backend/developer/智能体核心模块说明.md)。
 
 ## 1. 系统总览
 
@@ -123,7 +123,7 @@ flowchart TB
 - 所有评测 JSON 在 `backend/developer/`，CI 运行规则模式；真实模型评测按预算手动运行。
 - 最终验收与限制清单：[FINAL_REVIEW](FINAL_REVIEW.md)。
 
-## 7. 生产化差距（面试主动讲）
+## 7. 生产化差距
 
 - 身份服务/OIDC、TLS、密钥轮换、RBAC 多角色、workspace 成员与物理分区；
 - Redis/Chroma 高可用、备份/故障切换、容量压测；
